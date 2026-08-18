@@ -30,6 +30,47 @@ docker compose up -d
 
 > 첫 빌드는 Docling 모델을 이미지에 굽느라 수 분 걸린다(이미지 ~12GB). 이후 기동은 즉시.
 
+## GPU 가속 (NVIDIA / CUDA)
+
+변환 워커를 GPU에 올린다. **이미지는 CPU용과 같은 것을 쓴다** — 이미 들어있는 torch가
+CUDA 빌드(2.13+cu130, `sm_75~sm_120` → 3060 Ti의 `sm_86` 포함)라 카드를 물려주기만 하면 된다.
+
+```bash
+make gpu
+# = docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+```
+
+호스트 전제:
+
+- NVIDIA 드라이버 **580 이상** (cu130 요구치). 낮으면 CUDA 초기화가 실패하고 **조용히 CPU로 떨어진다**.
+- `nvidia-container-toolkit` 설치 후 `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker`
+- 확인: `docker run --rm --gpus all nvidia/cuda:13.0.0-base-ubuntu24.04 nvidia-smi`
+
+**실제로 GPU에 붙었는지는 워커 로그 한 줄로 확인한다.** 잡을 처음 처리할 때 찍힌다.
+
+```bash
+docker compose logs worker | grep 'device='
+# [pdf2md] device=cuda layout_batch=4 table_batch=4 queue=16 threads=6   ← GPU
+# [pdf2md] device=cpu  layout_batch=1 table_batch=1 queue=2  threads=6   ← CPU 폴백
+```
+
+GPU 오버레이가 바꾸는 것:
+
+| 항목 | CPU (기본) | GPU (`docker-compose.gpu.yml`) | 왜 |
+|---|---|---|---|
+| 추론 장치 | cpu | cuda:0 | docling `device='auto'`가 자동 선택 |
+| 레이아웃·표 배치 | 1 | `PDF2MD_GPU_BATCH` (기본 4) | CPU 천장은 호스트 RAM, GPU 천장은 VRAM. 배치 1은 카드를 굶긴다 |
+| 스테이지 큐 | 2 | 16 | 백엔드 페이지 파싱(CPU)이 GPU를 굶기지 않게 |
+| worker `mem_limit` | 5g | 12g | GPU 호스트 RAM 32GB 전제. 페이지 비트맵 파싱은 여전히 호스트 RAM이다 |
+
+**CUDA OOM이 나면** `PDF2MD_GPU_BATCH`를 2 → 1로 낮춘다(재빌드 불필요, 컨테이너 재생성만).
+VRAM 8GB에 레이아웃 모델과 TableFormer(ACCURATE)가 함께 상주하므로 여유가 크지 않다.
+OOM으로 실패한 잡은 `failed` 처리되고 워커는 스스로 종료 → `restart: unless-stopped`가
+깨끗한 CUDA 컨텍스트로 되살린다(할당자가 오염된 채로 이후 잡까지 연쇄 실패하는 것을 막는다).
+
+GPU가 없는 호스트에서는 오버레이 없이 `docker compose up -d` 그대로 쓴다. 기본 compose에
+GPU 예약을 넣지 않은 이유가 이것이다 — 넣으면 GPU 없는 곳에서 컨테이너가 아예 안 뜬다.
+
 ## 설정 (`.env`)
 
 | 변수 | 기본값 | 설명 |
@@ -38,6 +79,7 @@ docker compose up -d
 | `PDF2MD_ADMIN_KEY` | (빈값) | 관리자 전체조회 키. 비우면 관리자 기능 **비활성** |
 | `PDF2MD_SEC_PER_PAGE` | `1.5` | 진행률 추정용 초/페이지 (실측으로 보정) |
 | `PDF2MD_DATA` | `/data` | 데이터 루트 (compose가 `./data`에 마운트) |
+| `PDF2MD_GPU_BATCH` | `4` | GPU 배치 크기. **CUDA일 때만** 적용. CUDA OOM이면 2 → 1로 |
 
 ## 아키텍처
 
@@ -61,14 +103,16 @@ docker compose (이미지 1개, 서비스 2개)
 
 ### 변환 엔진
 
-Docling, CPU 전용. 저사양 호스트에 맞춰 튜닝:
+Docling. 장치는 `device='auto'` — GPU가 보이면 CUDA, 아니면 CPU다(위 [GPU 가속](#gpu-가속-nvidia--cuda) 참고).
+장치별로 배치·큐만 달라지고 나머지 설정과 출력은 같다.
 
 - `do_ocr=False` (텍스트 PDF 전제 → OCR 모델 미로딩, ~2GB 절감)
 - `TableFormerMode.ACCURATE` (표 정확도 우선)
-- **`PyPdfiumDocumentBackend` + `page_batch_size=1`** — 페이지를 1장씩 처리하고 가벼운 PDF
-  백엔드를 써서, 14MB·27페이지 이미지 조밀 문서도 **3GB 안에서 풀 품질로** 변환(실측 검증).
-- OOM 등으로 변환이 실패하면 **저사양 모드(그림 추출 off)로 1회 재시도**, 그래도 실패하면
-  명확한 메시지로 `failed` 처리(무한 재시도·큐 정지 방지).
+- 배치·큐를 CPU에서는 `1/1/2`까지 깎아 저사양 호스트(16GB, `mem_limit` 5g)에서 178페이지·표
+  87개 문서를 3.3GB로 변환한다. GPU에서는 이 값이 되레 카드를 굶기므로 `4/4/16`으로 올린다.
+- 컨버터는 프로세스당 1개를 캐시해 재사용한다(`lru_cache`) — 잡마다 모델을 다시 올리지 않는다.
+- 변환이 실패하면 **재시도 없이** 명확한 메시지로 `failed` 처리한다(무한 재시도·큐 정지 방지).
+  CUDA OOM일 때만 워커가 스스로 종료해 컨텍스트를 새로 잡는다.
 
 #### 공문서 마크다운 후처리 (`convert.postprocess`)
 

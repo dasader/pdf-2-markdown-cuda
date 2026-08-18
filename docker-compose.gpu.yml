@@ -1,0 +1,32 @@
+# NVIDIA GPU 오버레이. 기본 compose와 합쳐서 쓴다:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+#   (= make gpu)
+#
+# 별도 파일인 이유: GPU 예약을 docker-compose.yml에 직접 넣으면 GPU가 없는 호스트에서
+# "could not select device driver" 로 컨테이너가 아예 안 뜬다. 같은 리포를 CPU 호스트와
+# GPU 호스트 양쪽에서 돌리므로 기본 파일은 CPU로 남긴다.
+#
+# 호스트 전제:
+#   - NVIDIA 드라이버 580 이상. 이미지의 torch가 cu130 빌드라 그보다 낮으면 CUDA가
+#     초기화되지 않고 조용히 CPU로 떨어진다(worker 로그의 device= 줄로 확인).
+#   - nvidia-container-toolkit 설치 + `sudo nvidia-ctk runtime configure --runtime=docker`
+#   - 확인: docker run --rm --gpus all nvidia/cuda:13.0.0-base-ubuntu24.04 nvidia-smi
+services:
+  worker:
+    environment:
+      # 기본 compose의 worker에는 environment 블록이 없다 — CUDA 전용 손잡이라 여기 둔다.
+      PDF2MD_GPU_BATCH: "${PDF2MD_GPU_BATCH:-4}"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    # GPU 호스트는 RAM 32GB — CPU 호스트(16GB)에 맞춰 깎아둔 5g 천장을 풀어준다.
+    # 모델이 VRAM으로 올라가도 이 서비스의 OOM 주범인 페이지 비트맵 파싱은 그대로
+    # 호스트 RAM이다. 12g면 실측 최악 문서(6.1GB)도 죽지 않고 넘어간다.
+    mem_limit: 12g
+    memswap_limit: 12g   # mem_limit과 같은 값 = swap 금지(느리게 끄는 대신 즉시 실패)
+
+  # web은 변환을 하지 않는다(업로드 검증·큐잉·정적 파일만) — GPU를 주지 않는다.

@@ -3,6 +3,7 @@ import html
 import os
 import re
 import zipfile
+from functools import lru_cache
 from pathlib import Path
 
 import pypdfium2  # docling이 이미 의존하는 PDF 백엔드
@@ -342,6 +343,46 @@ def _usable_cpus() -> int:
     return os.cpu_count() or 4
 
 
+def _cuda_available() -> bool:
+    """GPU가 실제로 보이는지. 컨테이너에 --gpus를 안 주면 여기서 False가 되고
+    아래 설정이 통째로 CPU 값으로 돌아간다 — 이미지·코드는 한 벌만 유지한다.
+    이미지의 torch는 이미 CUDA 빌드(2.13+cu130, sm_75~sm_120 포함 → 3060 Ti의
+    sm_86 해당)라 GPU용 별도 이미지가 필요 없다."""
+    try:
+        import torch
+        return torch.cuda.is_available()
+    except Exception:  # torch 미설치(테스트) 또는 드라이버 불일치
+        return False
+
+
+# GPU 배치 크기. 3060 Ti는 VRAM 8GB뿐이고 레이아웃 모델과 TableFormer(ACCURATE)가
+# 동시에 상주하므로, CUDA OOM이 나면 여기를 2나 1로 낮춘다(재빌드 불필요).
+# 기본 4 = docling 기본값. ponytail: 하드웨어마다 다른 값이라 손잡이로 남긴다.
+GPU_BATCH = int(os.environ.get("PDF2MD_GPU_BATCH", "4"))
+
+
+def _perf_knobs(cuda: bool) -> dict:
+    """장치별 배치·큐 상한. 천장이 CPU에선 호스트 RAM, GPU에선 VRAM이라 값이 다르다.
+
+    CPU 값(1/1/2)은 16GB 호스트에서 mem_limit 5g를 안 넘기려고 실측으로 깎아둔 것이다
+    (178p·표 87개 3.90GB → 3.30GB). GPU에서 이 값을 그대로 쓰면 카드를 한 페이지씩만
+    먹여 가속이 거의 사라진다 — 배치가 곧 GPU 활용률이다.
+    큐(16)는 백엔드 페이지 파싱(CPU)이 GPU를 굶기지 않을 만큼만 깊게 잡은 값이다.
+    docling 기본 100은 32GB 호스트라면 감당되지만 in-flight 페이지 수만큼 RAM을 먹고,
+    실측상 큐를 키워도 속도는 안 붙었다(100 → 400에서 변화 없음).
+    """
+    if cuda:
+        return {"queue_max_size": 16,
+                "layout_batch_size": GPU_BATCH, "table_batch_size": GPU_BATCH}
+    return {"queue_max_size": 2, "layout_batch_size": 1, "table_batch_size": 1}
+
+
+# 잡마다 컨버터를 새로 만들면 모델을 매번 다시 올린다(실측 CPU 잡당 +0.8s, GPU는
+# VRAM 재업로드까지). 컨버터는 원래 재사용하라고 만든 물건이라 캐시가 정답이다.
+# maxsize=1인 이유: picture_images 두 값이 각각 모델 한 벌을 더 물어 8GB VRAM에
+# 두 벌을 얹기 싫다. 옵션이 번갈아 오면 지금처럼 다시 만들 뿐 더 나빠지지 않는다.
+# peak 메모리는 그대로다 — 잡을 도는 동안에는 어차피 모델이 떠 있다.
+@lru_cache(maxsize=1)
 def _build_converter(*, picture_images: bool = True):
     # 지연 import: 테스트가 torch 없이 돌게 함.
     from docling.datamodel.backend_options import PdfBackendOptions
@@ -379,9 +420,18 @@ def _build_converter(*, picture_images: bool = True):
     # ponytail: 이미지 객체가 수십만 개인 병리적 페이지(실측: 27p 문서의 한 페이지에
     # 609,831개)는 백엔드의 비트맵 파싱만으로 4GB를 써 이걸로도 못 막는다. 그런 문서는
     # worker가 재시도 없이 실패시킨다(_MAX_ATTEMPTS=1) — 실측 peak 6.1GB.
-    opts.queue_max_size = 2
-    opts.layout_batch_size = 1
-    opts.table_batch_size = 1
+    cuda = _cuda_available()
+    knobs = _perf_knobs(cuda)
+    opts.queue_max_size = knobs["queue_max_size"]
+    opts.layout_batch_size = knobs["layout_batch_size"]
+    opts.table_batch_size = knobs["table_batch_size"]
+    # device는 docling 기본값 'auto'로 둔다 — GPU가 보이면 cuda:0, 아니면 cpu다.
+    # 명시적으로 'cuda'를 박으면 GPU가 안 보일 때 조용히 CPU로 떨어지는 대신 뭐가
+    # 잘못됐는지 알기 어려워진다. 대신 어느 쪽으로 붙었는지는 로그로 남긴다 —
+    # 이 줄이 cpu면 --gpus나 nvidia-container-toolkit이 빠진 것이다.
+    print(f"[pdf2md] device={'cuda' if cuda else 'cpu'} "
+          f"layout_batch={opts.layout_batch_size} table_batch={opts.table_batch_size} "
+          f"queue={opts.queue_max_size} threads={_usable_cpus()}", flush=True)
 
     # 속도: docling 기본 num_threads는 4로 고정인데 torch 자체 기본값은 코어 수다 —
     # 6코어 호스트에서 docling이 오히려 낮춰 잡고 있었다. 실측(코어 6, 51p, 2회 평균):
@@ -396,6 +446,8 @@ def _build_converter(*, picture_images: bool = True):
     # ponytail: docker의 --cpus(cgroup 쿼터)까지는 안 본다 — affinity는 그대로라
     # 못 잡는다. 지금 compose에 cpus 제한이 없어 문제되지 않는다. 걸게 되면
     # /sys/fs/cgroup/cpu.max의 쿼터도 함께 봐야 한다.
+    # GPU에서도 이 값은 그대로 의미가 있다. 추론만 카드로 넘어가고 페이지 비트맵
+    # 파싱·후처리는 여전히 CPU라, 그쪽이 느리면 GPU가 굶는다.
     opts.accelerator_options.num_threads = _usable_cpus()
 
     # enforce_same_font=False: 기본값(True)은 폰트가 바뀌는 자리에서 텍스트 셀을 쪼갠다.
