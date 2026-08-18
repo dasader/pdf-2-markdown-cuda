@@ -364,12 +364,31 @@ GPU_BATCH = int(os.environ.get("PDF2MD_GPU_BATCH", "4"))
 def _perf_knobs(cuda: bool) -> dict:
     """장치별 배치·큐 상한. 천장이 CPU에선 호스트 RAM, GPU에선 VRAM이라 값이 다르다.
 
-    CPU 값(1/1/2)은 16GB 호스트에서 mem_limit 5g를 안 넘기려고 실측으로 깎아둔 것이다
-    (178p·표 87개 3.90GB → 3.30GB). GPU에서 이 값을 그대로 쓰면 카드를 한 페이지씩만
-    먹여 가속이 거의 사라진다 — 배치가 곧 GPU 활용률이다.
-    큐(16)는 백엔드 페이지 파싱(CPU)이 GPU를 굶기지 않을 만큼만 깊게 잡은 값이다.
-    docling 기본 100은 32GB 호스트라면 감당되지만 in-flight 페이지 수만큼 RAM을 먹고,
-    실측상 큐를 키워도 속도는 안 붙었다(100 → 400에서 변화 없음).
+    **큐가 배치를 직접 제한한다.** ThreadedQueue.get_batch는 배치가 찰 때까지 기다리지
+    않는다 — 큐에 1개라도 있으면 그때 있는 만큼만 꺼내간다(batch_polling_interval은
+    비었을 때의 대기 상한일 뿐이다). 그래서 queue_max_size가 실효 배치의 천장이고,
+    CPU 값 queue=2를 그대로 두면 layout_batch_size를 4로 올려도 배치는 영원히 ≤2다.
+    실측(51p 공문서, CPU 6코어, 계측 패치로 배치 길이 히스토그램 수집):
+        queue=2  batch=1 → layout 평균 배치 1.00 (1×51)
+        queue=16 batch=4 → layout 평균 배치 3.64 (4×12, 2×1, 1×1)
+    큐를 안 올리면 배치 설정이 死문이 된다는 뜻이다.
+
+    CPU 값(1/1/2)은 16GB 호스트에서 mem_limit 5g를 안 넘기려고 실측으로 깎아둔 것이고,
+    CPU에서는 배치를 키워봐야 손해다(같은 51p: 89.5s → 93.7s). torch가 이미 이미지
+    한 장에 전 코어를 쓰고 있어 배치로 더 짜낼 여유가 없다.
+
+    GPU에서 값이 뒤집히는 근거 — 같은 문서의 단계별 busy time(CPU, wall 89.5s):
+        preprocess  6.1s ( 7%)  ← CPU 전용. 가속 안 됨, 이게 GPU 후의 바닥이 된다
+        layout     42.9s (48%)  ← GPU
+        table      57.7s (64%)  ← GPU (두 단계는 별도 스레드라 겹쳐서 돈다)
+        assemble    0.0s
+    무거운 두 단계가 모두 GPU 대상이라 이론상 상한이 크다(preprocess 6.1s 부근까지).
+    큐 16은 그 바닥까지 카드를 굶기지 않을 만큼만 깊게 잡은 값이다. docling 기본 100은
+    32GB면 감당되지만 in-flight 페이지 수만큼 RAM을 먹고, 실측상 큐를 키워도 속도는
+    안 붙었다(100 → 400 변화 없음). GPU에서는 preprocess가 병목이라 큐가 차기보다
+    비어 있을 쪽이다 — 더 깊게 잡을 이유가 없다.
+    ponytail: 배치 4의 VRAM 실사용은 미측정이다(카드 없는 호스트에서 개발). 8GB가
+    빠듯하면 PDF2MD_GPU_BATCH로 낮춘다.
     """
     if cuda:
         return {"queue_max_size": 16,

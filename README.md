@@ -60,8 +60,32 @@ GPU 오버레이가 바꾸는 것:
 |---|---|---|---|
 | 추론 장치 | cpu | cuda:0 | docling `device='auto'`가 자동 선택 |
 | 레이아웃·표 배치 | 1 | `PDF2MD_GPU_BATCH` (기본 4) | CPU 천장은 호스트 RAM, GPU 천장은 VRAM. 배치 1은 카드를 굶긴다 |
-| 스테이지 큐 | 2 | 16 | 백엔드 페이지 파싱(CPU)이 GPU를 굶기지 않게 |
+| 스테이지 큐 | 2 | 16 | **큐가 실효 배치의 천장이다** (아래) |
 | worker `mem_limit` | 5g | 12g | GPU 호스트 RAM 32GB 전제. 페이지 비트맵 파싱은 여전히 호스트 RAM이다 |
+
+### 왜 큐까지 올리나 (배치만 올리면 안 되는 이유)
+
+docling의 `ThreadedQueue.get_batch`는 **배치가 찰 때까지 기다리지 않는다.** 큐에 1개라도
+있으면 그때 있는 만큼만 꺼내간다. 그래서 `queue_max_size`가 실효 배치의 천장이고,
+CPU 값 `queue=2`를 그대로 둔 채 `layout_batch_size`만 4로 올리면 배치는 영원히 ≤2다.
+51페이지 공문서에 계측 패치를 붙여 배치 길이를 직접 세어본 결과:
+
+| 설정 | layout 평균 배치 | 히스토그램 |
+|---|---|---|
+| `queue=2 batch=1` (CPU) | 1.00 | `1×51` |
+| `queue=16 batch=4` (GPU) | **3.64** | `4×12, 2×1, 1×1` |
+
+같은 문서의 단계별 busy time(CPU 6코어, wall 89.5s) — GPU가 가져갈 몫이 어디인지:
+
+| 단계 | busy | 비고 |
+|---|---|---|
+| preprocess | 6.1s (7%) | **CPU 전용, 가속 안 됨** — GPU 적용 후의 바닥 |
+| layout | 42.9s (48%) | GPU 대상 |
+| table | 57.7s (64%) | GPU 대상 (layout과 별도 스레드라 겹쳐 돈다) |
+| assemble | ~0s | |
+
+무거운 두 단계가 모두 GPU 대상이라 상한이 크다. 반대로 CPU에서는 배치를 키우면 되레
+손해라(89.5s → 93.7s) 기본 compose는 `1/1/2`를 유지한다.
 
 **CUDA OOM이 나면** `PDF2MD_GPU_BATCH`를 2 → 1로 낮춘다(재빌드 불필요, 컨테이너 재생성만).
 VRAM 8GB에 레이아웃 모델과 TableFormer(ACCURATE)가 함께 상주하므로 여유가 크지 않다.
