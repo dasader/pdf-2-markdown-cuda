@@ -43,8 +43,14 @@ def process_one(conn) -> bool:
         db.finish_job(conn, job["id"], status="done", result_dir=str(out_dir),
                        n_tables=n_tables, n_images=n_images)
     except Exception:
-        db.finish_job(conn, job["id"], status="failed",
-                      error=traceback.format_exc(limit=3))
+        err = traceback.format_exc(limit=3)
+        db.finish_job(conn, job["id"], status="failed", error=err)
+        # CUDA OOM은 호스트 RAM OOM과 달리 프로세스를 죽이지 않고 살려두는데, 그
+        # 상태의 할당자에 남은 조각 때문에 이후 잡이 줄줄이 같은 오류로 실패한다.
+        # 워커가 조용히 무용지물이 되는 것보다 죽는 게 낫다 —
+        # restart: unless-stopped가 깨끗한 CUDA 컨텍스트로 되살린다.
+        if "CUDA out of memory" in err:
+            raise SystemExit(1)
     return True
 
 

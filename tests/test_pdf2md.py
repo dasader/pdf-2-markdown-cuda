@@ -1079,3 +1079,23 @@ def test_web_self_initializes_storage_without_worker(tmp_path, monkeypatch):
         r = c.get("/api/jobs")
         assert r.status_code == 200
         assert r.json() == {"jobs": [], "busy": False}
+
+
+def test_perf_knobs_gpu_batches_beat_cpu():
+    """CPU 값(배치 1)이 GPU로 새면 카드를 한 페이지씩만 먹여 가속이 거의 사라진다."""
+    cpu = convert._perf_knobs(cuda=False)
+    gpu = convert._perf_knobs(cuda=True)
+    assert cpu == {"queue_max_size": 2, "layout_batch_size": 1, "table_batch_size": 1}
+    assert gpu["layout_batch_size"] > 1 and gpu["table_batch_size"] > 1
+    assert gpu["queue_max_size"] > cpu["queue_max_size"]
+
+
+def test_perf_knobs_gpu_batch_env_knob(monkeypatch):
+    """VRAM이 모자랄 때 재빌드 없이 낮출 수 있어야 한다."""
+    monkeypatch.setattr(convert, "GPU_BATCH", 1)
+    assert convert._perf_knobs(cuda=True)["layout_batch_size"] == 1
+
+
+def test_cuda_available_false_without_torch():
+    """torch가 없으면 예외 대신 False → CPU 설정으로 되돌아간다(테스트가 이 경로다)."""
+    assert convert._cuda_available() is False
