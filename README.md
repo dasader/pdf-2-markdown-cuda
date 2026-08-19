@@ -33,7 +33,9 @@ docker compose up -d
 ## GPU 가속 (NVIDIA / CUDA)
 
 변환 워커를 GPU에 올린다. **이미지는 CPU용과 같은 것을 쓴다** — 이미 들어있는 torch가
-CUDA 빌드(2.13+cu130, `sm_75~sm_120` → 3060 Ti의 `sm_86` 포함)라 카드를 물려주기만 하면 된다.
+CUDA 빌드(2.13+cu130, arch_list `sm_75/80/86/90/100/120`)라 카드를 물려주기만 하면 된다.
+Ada 세대 랩탑 GPU(40x0, `sm_89`)는 목록에 없지만 CUDA 마이너 상향 호환으로 `sm_86` 큐빈이
+그대로 돈다 — **재빌드 불필요**.
 
 ```bash
 make gpu
@@ -61,7 +63,22 @@ GPU 오버레이가 바꾸는 것:
 | 추론 장치 | cpu | cuda:0 | docling `device='auto'`가 자동 선택 |
 | 레이아웃·표 배치 | 1 | `PDF2MD_GPU_BATCH` (기본 4) | CPU 천장은 호스트 RAM, GPU 천장은 VRAM. 배치 1은 카드를 굶긴다 |
 | 스테이지 큐 | 2 | 16 | **큐가 실효 배치의 천장이다** (아래) |
-| worker `mem_limit` | 5g | 12g | GPU 호스트 RAM 32GB 전제. 페이지 비트맵 파싱은 여전히 호스트 RAM이다 |
+| worker `mem_limit` | 5g | `PDF2MD_WORKER_MEM` (기본 12g) | 페이지 비트맵 파싱은 여전히 호스트 RAM이다 |
+
+### 카드·랩탑별 값
+
+VRAM과 호스트 RAM이 다르면 **`.env` 두 줄만 바꾼다.** 코드도 이미지도 그대로다.
+
+| 하드웨어 | `PDF2MD_GPU_BATCH` | `PDF2MD_WORKER_MEM` |
+|---|---|---|
+| 3060 Ti 8GB / RAM 32GB | `4` | `12g` |
+| **RTX 4050 랩탑 6GB / RAM 16GB** | **`2`** | **`8g`** |
+| VRAM 4GB 이하 | `1` | RAM의 절반 |
+
+랩탑에서 배치를 낮추는 이유는 VRAM 2GB 차이만이 아니다 — 랩탑은 **화면 출력이 같은 카드에서
+빠져나가고**(데스크톱 환경이 상시 수백 MB~1GB 점유), TGP 제한과 발열로 클럭도 흔들린다.
+`8g`는 RAM 16GB 호스트에서 OS·브라우저와 함께 살아남는 값이다. 호스트가 실제로 못 주는
+천장을 걸어두면 도커의 OOM 처리가 아니라 **커널 OOM killer가 프로세스를 죽인다.**
 
 ### 왜 큐까지 올리나 (배치만 올리면 안 되는 이유)
 
@@ -87,13 +104,41 @@ CPU 값 `queue=2`를 그대로 둔 채 `layout_batch_size`만 4로 올리면 배
 무거운 두 단계가 모두 GPU 대상이라 상한이 크다. 반대로 CPU에서는 배치를 키우면 되레
 손해라(89.5s → 93.7s) 기본 compose는 `1/1/2`를 유지한다.
 
-**CUDA OOM이 나면** `PDF2MD_GPU_BATCH`를 2 → 1로 낮춘다(재빌드 불필요, 컨테이너 재생성만).
-VRAM 8GB에 레이아웃 모델과 TableFormer(ACCURATE)가 함께 상주하므로 여유가 크지 않다.
+**CUDA OOM이 나면** `PDF2MD_GPU_BATCH`를 한 단계씩 낮춘다(재빌드 불필요, 컨테이너 재생성만).
+레이아웃 모델과 TableFormer(ACCURATE)가 VRAM에 함께 상주하므로 여유가 크지 않다.
 OOM으로 실패한 잡은 `failed` 처리되고 워커는 스스로 종료 → `restart: unless-stopped`가
 깨끗한 CUDA 컨텍스트로 되살린다(할당자가 오염된 채로 이후 잡까지 연쇄 실패하는 것을 막는다).
 
 GPU가 없는 호스트에서는 오버레이 없이 `docker compose up -d` 그대로 쓴다. 기본 compose에
 GPU 예약을 넣지 않은 이유가 이것이다 — 넣으면 GPU 없는 곳에서 컨테이너가 아예 안 뜬다.
+
+### 다른 머신에 옮겨 돌리기
+
+이미지를 옮길 필요 없다. 리포만 있으면 그 자리에서 빌드된다(모델은 빌드 타임에 이미지로
+들어가므로 첫 빌드에만 인터넷이 필요하고, 이후 변환은 오프라인으로 돈다).
+
+```bash
+git clone git@github.com:dasader/pdf-2-markdown-cuda.git && cd pdf-2-markdown-cuda
+cp .env.example .env      # PDF2MD_GPU_BATCH / PDF2MD_WORKER_MEM 을 위 표대로
+make gpu
+docker compose logs worker | grep 'device='   # device=cuda 여야 한다
+```
+
+`device=cpu`가 찍히면 카드가 컨테이너까지 안 들어온 것이다. 아래를 순서대로 본다.
+
+| OS | 준비 |
+|---|---|
+| Linux | NVIDIA 드라이버 ≥580 → `nvidia-container-toolkit` → `sudo nvidia-ctk runtime configure --runtime=docker` → `sudo systemctl restart docker` |
+| **Windows** | Windows용 NVIDIA 드라이버 ≥580 + Docker Desktop(WSL2 백엔드). **WSL 안에 드라이버를 따로 깔면 안 된다** — Windows 드라이버가 WSL로 통과된다. 툴킷도 Docker Desktop에 포함돼 있다 |
+
+공통 확인: `docker run --rm --gpus all nvidia/cuda:13.0.0-base-ubuntu24.04 nvidia-smi`
+
+**Windows(WSL2) 추가 함정:** WSL2는 기본적으로 호스트 RAM의 **절반**까지만 쓴다. RAM 16GB
+랩탑이면 WSL 전체가 8GB라 `PDF2MD_WORKER_MEM=12g`는 애초에 줄 수 없는 천장이다. 6g로 낮추거나
+`%UserProfile%\.wslconfig`에 `[wsl2]` / `memory=12GB`를 넣고 `wsl --shutdown` 후 다시 띄운다.
+
+첫 변환 뒤 `PDF2MD_SEC_PER_PAGE`를 그 머신의 실측 초/페이지로 보정한다(진행률 표시용).
+카드가 다르면 값도 달라진다 — 4050 랩탑은 3060 Ti보다 대략 절반 성능이다.
 
 ## 설정 (`.env`)
 
@@ -104,6 +149,7 @@ GPU 예약을 넣지 않은 이유가 이것이다 — 넣으면 GPU 없는 곳�
 | `PDF2MD_SEC_PER_PAGE` | `1.5` | 진행률 추정용 초/페이지 (실측으로 보정) |
 | `PDF2MD_DATA` | `/data` | 데이터 루트 (compose가 `./data`에 마운트) |
 | `PDF2MD_GPU_BATCH` | `4` | GPU 배치 크기. **CUDA일 때만** 적용. CUDA OOM이면 2 → 1로 |
+| `PDF2MD_WORKER_MEM` | `12g` | worker RAM 천장. **GPU 오버레이에서만** 적용. RAM 16GB 랩탑이면 `8g` |
 
 ## 아키텍처
 

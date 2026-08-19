@@ -346,8 +346,10 @@ def _usable_cpus() -> int:
 def _cuda_available() -> bool:
     """GPU가 실제로 보이는지. 컨테이너에 --gpus를 안 주면 여기서 False가 되고
     아래 설정이 통째로 CPU 값으로 돌아간다 — 이미지·코드는 한 벌만 유지한다.
-    이미지의 torch는 이미 CUDA 빌드(2.13+cu130, sm_75~sm_120 포함 → 3060 Ti의
-    sm_86 해당)라 GPU용 별도 이미지가 필요 없다."""
+    이미지의 torch는 이미 CUDA 빌드(2.13+cu130, arch_list sm_75/80/86/90/100/120)라
+    GPU용 별도 이미지가 필요 없다. 3060 Ti(Ampere)는 sm_86으로 직접 맞고, 40x0 랩탑
+    (Ada, sm_89)은 목록에 없지만 CUDA의 마이너 상향 호환으로 sm_86 큐빈이 그대로 돈다
+    (torch._code_compatible_with_device(89, 86) is True로 확인). 재빌드 불필요."""
     try:
         import torch
         return torch.cuda.is_available()
@@ -355,8 +357,9 @@ def _cuda_available() -> bool:
         return False
 
 
-# GPU 배치 크기. 3060 Ti는 VRAM 8GB뿐이고 레이아웃 모델과 TableFormer(ACCURATE)가
-# 동시에 상주하므로, CUDA OOM이 나면 여기를 2나 1로 낮춘다(재빌드 불필요).
+# GPU 배치 크기. 레이아웃 모델과 TableFormer(ACCURATE)가 VRAM에 동시 상주하므로
+# 카드마다 천장이 다르다: 8GB(3060 Ti) 4, 6GB(4050 랩탑) 2 — 랩탑은 데스크톱이
+# 화면에 쓰는 몫까지 같은 카드에서 빠진다. CUDA OOM이 나면 한 단계씩 낮춘다.
 # 기본 4 = docling 기본값. ponytail: 하드웨어마다 다른 값이라 손잡이로 남긴다.
 GPU_BATCH = int(os.environ.get("PDF2MD_GPU_BATCH", "4"))
 

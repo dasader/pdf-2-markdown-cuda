@@ -23,10 +23,13 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    # GPU 호스트는 RAM 32GB — CPU 호스트(16GB)에 맞춰 깎아둔 5g 천장을 풀어준다.
     # 모델이 VRAM으로 올라가도 이 서비스의 OOM 주범인 페이지 비트맵 파싱은 그대로
-    # 호스트 RAM이다. 12g면 실측 최악 문서(6.1GB)도 죽지 않고 넘어간다.
-    mem_limit: 12g
-    memswap_limit: 12g   # mem_limit과 같은 값 = swap 금지(느리게 끄는 대신 즉시 실패)
+    # 호스트 RAM이다. 기본 12g는 RAM 32GB 데스크톱 기준 — 실측 최악 문서(6.1GB)도
+    # 죽지 않고 넘어가는 값이다. RAM 16GB 랩탑이면 .env에서 8g로 낮춘다
+    # (호스트가 못 주는 천장을 걸어두면 도커가 아니라 커널이 프로세스를 죽인다).
+    mem_limit: "${PDF2MD_WORKER_MEM:-12g}"
+    # mem_limit과 같은 값 = swap 금지(느리게 끄는 대신 즉시 실패). 랩탑 SSD로 스왑이
+    # 밀리기 시작하면 워커 1개짜리 큐가 통째로 몇 배 느려진다.
+    memswap_limit: "${PDF2MD_WORKER_MEM:-12g}"
 
   # web은 변환을 하지 않는다(업로드 검증·큐잉·정적 파일만) — GPU를 주지 않는다.
