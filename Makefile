@@ -1,4 +1,4 @@
-.PHONY: build rebuild gpu check-offline
+.PHONY: build rebuild gpu check-offline ca
 
 # up -d --build 하나가 빌드+기동을 다 한다. mem_limit이 바뀌면 컨테이너도 재생성된다.
 # Dockerfile이 app/·static/을 COPY하므로 코드가 바뀌면 이미지 해시가 바뀌어 컨테이너도
@@ -24,3 +24,20 @@ check-offline:
 	  python -c "from app import convert; import tempfile, pathlib; \
 	    d = pathlib.Path(tempfile.mkdtemp()); convert.convert('/t/fixtures/sample.pdf', d, include_images=True, include_tables_csv=True); \
 	    assert (d / 'doc.md').exists(); print('OK: 인터넷 없이 변환됨')"
+
+# 빌드가 CERTIFICATE_VERIFY_FAILED(self-signed certificate in certificate chain)로
+# 죽을 때 쓴다. 사내 프록시가 TLS를 가로채는 망이라는 뜻이고, huggingface.co가
+# 내미는 인증서 체인을 그대로 certs/ 에 담아두면 빌드가 그걸 신뢰한다.
+# 발급자를 같이 찍는다 — Amazon/DigiCert 류면 정상 망이고(그럼 원인은 TLS가 아니다),
+# 사내 어플라이언스 이름이 나오면 그놈이 범인이다.
+# 루트가 체인에 안 실려와도 된다: OpenSSL은 신뢰 저장소에 있는 중간 인증서에서도
+# 경로 검증을 끝낸다.
+ca:
+	@openssl s_client -showcerts -connect huggingface.co:443 </dev/null 2>/dev/null \
+	  | awk '/BEGIN CERT/,/END CERT/' > certs/proxy-chain.crt
+	@test -s certs/proxy-chain.crt || { rm -f certs/proxy-chain.crt; \
+	  echo "체인을 못 받았다 — huggingface.co가 통째로 막힌 망이다. README의 docker save 경로를 쓴다."; \
+	  exit 1; }
+	@openssl crl2pkcs7 -nocrl -certfile certs/proxy-chain.crt \
+	  | openssl pkcs7 -print_certs -noout | grep issuer=
+	@echo "→ certs/proxy-chain.crt 저장 완료. 이제 make gpu 로 다시 빌드한다."
