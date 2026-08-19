@@ -146,11 +146,30 @@ docker compose logs worker | grep 'device='   # device=cuda 여야 한다
 `CERTIFICATE_VERIFY_FAILED: self-signed certificate in certificate chain` 은 프록시가
 TLS를 가로채는 망이라는 뜻이다. 모델 다운로드는 huggingface.co로 나가므로 여기서 막힌다.
 
-- **루트 CA를 넣는다** — 사내 루트 인증서를 `certs/`에 `.crt`로 두고 다시 빌드한다.
-  OS 신뢰 저장소와 **certifi 번들 양쪽에** 들어간다(httpx·huggingface_hub는 certifi만
-  본다 — `update-ca-certificates`만으로는 안 먹는다). `certs/*.crt`는 `.gitignore` 대상이다.
-- **또는 이미지를 통째로 옮긴다** — 망이 깨끗한 곳에서 빌드해
-  `docker save pdf2md:latest | zstd > pdf2md.tar.zst` → 옮긴 뒤 `zstd -d -c pdf2md.tar.zst | docker load`.
+```bash
+make ca      # 가로채는 인증서를 뽑아 certs/ 에 넣는다
+make gpu     # 다시 빌드 (CPU 호스트면 make build)
+```
+
+`make ca`가 찍는 발급자(issuer)로 원인이 바로 보인다. `Amazon`·`DigiCert` 류가 나오면
+가로채는 게 없는 정상 망이라 원인은 TLS가 아니다. 사내 어플라이언스 이름이 나오면 그것이다.
+
+certs/에 둔 인증서는 OS 신뢰 저장소와 **certifi 번들 양쪽에** 들어간다.
+**`update-ca-certificates`만으로는 안 먹는다** — httpx·huggingface_hub는 OS 저장소를
+보지 않는다. 자체 서명 CA로 확인한 결과:
+
+| 시도 | 결과 |
+|---|---|
+| 아무것도 안 함 | 실패 (`CERTIFICATE_VERIFY_FAILED`) |
+| `update-ca-certificates`만 | **여전히 실패** |
+| certifi 번들에 덧붙임 | **통과** |
+
+`certs/*.crt`는 `.gitignore` 대상이라 커밋되지 않는다.
+
+**`make ca`가 "체인을 못 받았다"고 하면** huggingface.co 자체가 막힌 망이다. 그때는
+이미지를 통째로 옮긴다 — 망이 깨끗한 곳에서 빌드해
+`docker save pdf2md:latest | zstd > pdf2md.tar.zst` → 옮긴 뒤
+`zstd -d -c pdf2md.tar.zst | docker load`.
 
 빌드는 모델을 못 받으면 **거기서 실패한다**(예전에는 `|| true`로 넘어가 정상처럼 보이는
 이미지가 나왔고, 그 사실이 잡마다 터지는 런타임 오류로만 드러났다).
