@@ -33,10 +33,14 @@ check-offline:
 # 루트가 체인에 안 실려와도 된다: OpenSSL은 신뢰 저장소에 있는 중간 인증서에서도
 # 경로 검증을 끝낸다.
 ca:
+	@command -v openssl >/dev/null 2>&1 || { \
+	  echo "openssl이 없다. 설치 후 다시: sudo apt-get install -y openssl"; exit 1; }
+	@echo "huggingface.co가 내미는 인증서 체인을 받는다..."
 	@openssl s_client -showcerts -connect huggingface.co:443 </dev/null 2>/dev/null \
 	  | awk '/BEGIN CERT/,/END CERT/' > certs/proxy-chain.crt
 	@test -s certs/proxy-chain.crt || { rm -f certs/proxy-chain.crt; \
-	  echo "체인을 못 받았다 — huggingface.co가 통째로 막힌 망이다. README의 docker save 경로를 쓴다."; \
+	  echo "체인을 못 받았다 — huggingface.co에 TCP 연결 자체가 안 되는 망이다."; \
+	  echo "인증서 문제가 아니므로 CA를 넣어도 소용없다. README의 docker save 경로를 쓴다."; \
 	  exit 1; }
 	@openssl crl2pkcs7 -nocrl -certfile certs/proxy-chain.crt \
 	  | openssl pkcs7 -print_certs -noout | grep issuer=

@@ -14,7 +14,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # certifi에도 덧붙이는 이유: httpx/huggingface_hub는 OS 신뢰 저장소가 아니라
 # certifi 번들만 본다(update-ca-certificates만으로는 안 먹는다).
 COPY certs/ /usr/local/share/ca-certificates/
-RUN if ls /usr/local/share/ca-certificates/*.crt >/dev/null 2>&1; then \
+RUN echo "사내 CA: $(ls /usr/local/share/ca-certificates/*.crt 2>/dev/null | wc -l)개" && \
+    if ls /usr/local/share/ca-certificates/*.crt >/dev/null 2>&1; then \
       update-ca-certificates && \
       cat /usr/local/share/ca-certificates/*.crt >> "$(python -c 'import certifi; print(certifi.where())')"; \
     fi
@@ -26,8 +27,25 @@ RUN if ls /usr/local/share/ca-certificates/*.crt >/dev/null 2>&1; then \
 # 안 받는 것: OCR(do_ocr=False, 99MB), 코드·수식(611MB), 그림 분류(33MB) — 이
 # 파이프라인이 켜지 않는 모델이라 받아봐야 이미지만 키우고 빌드 실패 지점만 늘린다.
 # ponytail: 나중에 do_ocr이나 enrichment를 켜면 여기 플래그도 같이 켜야 한다.
+# 실패하면 안내를 붙여 죽는다 — huggingface_hub의 기본 메시지는 100줄 트레이스백
+# 끝에 "인터넷 연결을 확인하세요"라 사내망에서는 틀린 안내다.
 RUN python -c "from docling.utils.model_downloader import download_models; \
-    download_models(with_rapidocr=False, with_code_formula=False, with_picture_classifier=False)"
+    download_models(with_rapidocr=False, with_code_formula=False, with_picture_classifier=False)" \
+  || { echo ""; \
+       echo "=================================================================="; \
+       echo " 모델 다운로드 실패."; \
+       echo " 이 이미지에 설치된 사내 CA: $(ls /usr/local/share/ca-certificates/*.crt 2>/dev/null | wc -l)개"; \
+       echo ""; \
+       echo " 위가 0개이고 오류가 CERTIFICATE_VERIFY_FAILED 라면 프록시가 TLS를"; \
+       echo " 가로채는 망이다. certs/ 가 비어 있다는 뜻이므로 호스트에서:"; \
+       echo ""; \
+       echo "     make ca      # 가로채는 인증서를 certs/ 에 담는다"; \
+       echo "     make gpu     # 다시 빌드 (CPU 호스트면 make build)"; \
+       echo ""; \
+       echo " 1개 이상인데도 실패하면 그 인증서로는 부족하다 — README의"; \
+       echo " docker save 경로를 쓴다."; \
+       echo "=================================================================="; \
+       exit 1; }
 
 COPY app/ app/
 COPY static/ static/
