@@ -410,6 +410,7 @@ def _build_converter(*, picture_images: bool = True):
     from docling.datamodel.backend_options import PdfBackendOptions
     from docling.datamodel.base_models import InputFormat
     from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
+    from docling.datamodel.settings import settings
     from docling.document_converter import DocumentConverter, PdfFormatOption
 
     # 백엔드는 docling 기본값(DoclingParseDocumentBackend)을 쓴다. 한때 더 가벼운
@@ -430,6 +431,19 @@ def _build_converter(*, picture_images: bool = True):
     # <!-- image --> 개수(21)도 그대로다 — 그림 '검출'은 레이아웃 모델이 하고, 이 옵션은
     # 검출된 자리를 크롭·인코딩할지만 정한다.
     opts.generate_picture_images = picture_images
+
+    # 빌드 타임에 받아둔 모델(이미지 안 1.3GB)을 런타임이 실제로 쓰게 한다.
+    # 이 줄이 없으면 docling이 그 디렉터리를 쳐다보지도 않고 매번 HF에서 스냅샷을
+    # 새로 받는다 — download_models()는 local_dir=로 받는데 런타임 LayoutModel은
+    # artifacts_path가 None이면 기본 HF 캐시만 보기 때문이다(경로가 갈려 있었다).
+    # 결과: 컨테이너를 새로 만들 때마다 1.3GB 재다운로드, 그리고 망이 막히거나
+    # TLS를 가로채는 곳에서는 변환이 아예 실패한다.
+    # 재현: docker run --network none ... → LocalEntryNotFoundError.
+    # exists() 가드: 모델 없이 빌드된 이미지에서는 예전처럼 HF로 폴백한다
+    # (없는 경로를 넘기면 docling이 그걸 그대로 모델 경로로 믿고 더 나쁘게 죽는다).
+    _artifacts = settings.cache_dir / "models"
+    if _artifacts.exists():
+        opts.artifacts_path = _artifacts
 
     # 메모리: do_ocr=False 다음으로 큰 레버가 파이프라인에 동시에 떠 있는 페이지 수다.
     # 여기 한때 settings.perf.page_batch_size=1이 있었는데, 그건 PaginatedPipeline의
