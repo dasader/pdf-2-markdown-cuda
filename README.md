@@ -114,8 +114,9 @@ GPU 예약을 넣지 않은 이유가 이것이다 — 넣으면 GPU 없는 곳�
 
 ### 다른 머신에 옮겨 돌리기
 
-이미지를 옮길 필요 없다. 리포만 있으면 그 자리에서 빌드된다(모델은 빌드 타임에 이미지로
-들어가므로 첫 빌드에만 인터넷이 필요하고, 이후 변환은 오프라인으로 돈다).
+이미지를 옮길 필요 없다. 리포만 있으면 그 자리에서 빌드된다. 모델(506MB)은 빌드 타임에
+이미지로 들어가므로 **첫 빌드에만 인터넷이 필요하고 이후 변환은 완전히 오프라인**이다.
+확인: `make check-offline` (`--network none`으로 실제 변환을 돌린다).
 
 ```bash
 git clone git@github.com:dasader/pdf-2-markdown-cuda.git && cd pdf-2-markdown-cuda
@@ -139,6 +140,20 @@ docker compose logs worker | grep 'device='   # device=cuda 여야 한다
 
 첫 변환 뒤 `PDF2MD_SEC_PER_PAGE`를 그 머신의 실측 초/페이지로 보정한다(진행률 표시용).
 카드가 다르면 값도 달라진다 — 4050 랩탑은 3060 Ti보다 대략 절반 성능이다.
+
+#### 빌드가 TLS 오류로 죽으면 (사내망·프록시)
+
+`CERTIFICATE_VERIFY_FAILED: self-signed certificate in certificate chain` 은 프록시가
+TLS를 가로채는 망이라는 뜻이다. 모델 다운로드는 huggingface.co로 나가므로 여기서 막힌다.
+
+- **루트 CA를 넣는다** — 사내 루트 인증서를 `certs/`에 `.crt`로 두고 다시 빌드한다.
+  OS 신뢰 저장소와 **certifi 번들 양쪽에** 들어간다(httpx·huggingface_hub는 certifi만
+  본다 — `update-ca-certificates`만으로는 안 먹는다). `certs/*.crt`는 `.gitignore` 대상이다.
+- **또는 이미지를 통째로 옮긴다** — 망이 깨끗한 곳에서 빌드해
+  `docker save pdf2md:latest | zstd > pdf2md.tar.zst` → 옮긴 뒤 `zstd -d -c pdf2md.tar.zst | docker load`.
+
+빌드는 모델을 못 받으면 **거기서 실패한다**(예전에는 `|| true`로 넘어가 정상처럼 보이는
+이미지가 나왔고, 그 사실이 잡마다 터지는 런타임 오류로만 드러났다).
 
 ## 설정 (`.env`)
 
@@ -181,6 +196,9 @@ Docling. 장치는 `device='auto'` — GPU가 보이면 CUDA, 아니면 CPU다(�
 - 배치·큐를 CPU에서는 `1/1/2`까지 깎아 저사양 호스트(16GB, `mem_limit` 5g)에서 178페이지·표
   87개 문서를 3.3GB로 변환한다. GPU에서는 이 값이 되레 카드를 굶기므로 `4/4/16`으로 올린다.
 - 컨버터는 프로세스당 1개를 캐시해 재사용한다(`lru_cache`) — 잡마다 모델을 다시 올리지 않는다.
+- 모델은 빌드 타임에 이미지로 들어가고 런타임은 `artifacts_path`로 그걸 가리킨다 —
+  **변환에 인터넷이 필요 없다**(`make check-offline`). 지정하지 않으면 docling이 그
+  디렉터리를 무시하고 매번 HF에서 스냅샷을 새로 받는다.
 - 변환이 실패하면 **재시도 없이** 명확한 메시지로 `failed` 처리한다(무한 재시도·큐 정지 방지).
   CUDA OOM일 때만 워커가 스스로 종료해 컨텍스트를 새로 잡는다.
 

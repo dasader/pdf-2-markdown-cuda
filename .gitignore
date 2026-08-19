@@ -5,3 +5,5 @@ __pycache__/
 .venv/
 /tmp/
 .superpowers/
+certs/*.crt
+certs/*.pem
