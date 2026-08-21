@@ -1044,12 +1044,15 @@ def test_upload_rejects_oversize(client, monkeypatch):
 
 
 def test_upload_rejects_too_many_pages(client, monkeypatch):
+    from app import web
     monkeypatch.setattr(config, "MAX_PAGES", 0)
     r = client.post("/api/jobs", files={"files": ("a.pdf", _pdf_bytes(), "application/pdf")},
                     data={"include_images": "true", "include_tables_csv": "true"})
     job = r.json()[0]
     assert job["status"] == "failed"
-    assert "500페이지" in job["error"]
+    # 문구는 import 시점의 MAX_PAGES로 굳는다(monkeypatch는 판정에만 영향) — 상한을
+    # 조정해도 안 깨지도록 web의 상수와 대조한다.
+    assert job["error"] == web._TOO_MANY_PAGES
 
 
 def test_upload_rejects_textless_pdf(client, monkeypatch):
