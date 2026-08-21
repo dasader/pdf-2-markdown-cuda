@@ -113,15 +113,17 @@ function patchCard(el, j) {
       '<span class="chip"></span>' +
       '<button class="act" type="button">미리보기</button>' +
       '<button class="act ghost" type="button">마크다운 복사</button>' +
+      '<button class="act ghost" type="button">MD 내려받기</button>' +
       '<button class="act ghost" type="button">ZIP 내려받기</button>';
     meta.querySelector(".chip").textContent = `표 ${j.n_tables || 0} · 이미지 ${j.n_images || 0}`;
     const btns = meta.querySelectorAll("button");
+    const stem = (j.filename ? j.filename.replace(/\.[^./]+$/, "") : "") || "result";
     btns[0].onclick = () => openPreview(j.id);
     btns[1].onclick = () => copyMd(j.id, btns[1]);
-    btns[2].onclick = () => {
-      const stem = (j.filename ? j.filename.replace(/\.[^./]+$/, "") : "") || "result";
-      download(`/api/jobs/${j.id}/download`, `${stem}.zip`);
-    };
+    // ponytail: MD만 받기는 preview 응답(마크다운 원문)을 그대로 파일로 저장한다.
+    // 전용 엔드포인트 불필요 — download()가 blob + a.download로 파일명을 붙인다.
+    btns[2].onclick = () => download(`/api/jobs/${j.id}/preview`, `${stem}.md`);
+    btns[3].onclick = () => download(`/api/jobs/${j.id}/download`, `${stem}.zip`);
     el.appendChild(meta);
   }
 }

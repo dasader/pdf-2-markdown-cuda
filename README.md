@@ -13,7 +13,9 @@ PDF를 업로드하면 **Markdown**으로 변환해 내려받는 웹서비스. �
   (`앞에 N개 대기`)과 "다른 변환 처리 중" 하트비트로 동시 사용 상황도 정직하게 표시.
 - **실시간 진행 상황** — SSE로 상태·진행률 push. (진행률은 페이지 수 기반 추정치)
 - **표 → CSV, 그림 → 이미지, 전체 → ZIP** — `doc.md` + `images/` + `tables/*.csv`를 ZIP으로.
-- **미리보기 · 마크다운 복사 · 완료분 전체 내려받기**.
+  두 옵션 모두 **기본 꺼짐** — 대부분은 본문만 필요하고, 켜면 변환이 눈에 띄게 느려진다.
+  (표는 옵션과 무관하게 본문에 마크다운 표로 들어간다)
+- **미리보기 · 마크다운 복사 · MD만 내려받기 · 완료분 전체 내려받기**.
 - **해시 캐시** — 같은 파일·같은 옵션이면 변환을 건너뛰고 즉시 결과 반환.
 - **멀티유저** — 로그인 없이 쿠키 세션으로 사용자별 격리. `X-Admin-Key`로 전체 조회.
 - **노션풍 UI** — 밝고 부드러운 단일 페이지, 다크 모드 지원, 폐쇄망 대비 폰트·라이브러리 self-host.
@@ -247,11 +249,11 @@ docling 출력을 그대로 쓰면 공문서 조판 특유의 잡음이 남는�
 | 메서드 | 경로 | 설명 |
 |---|---|---|
 | `GET` | `/` | 웹 UI |
-| `POST` | `/api/jobs` | multipart 업로드(다중). 폼필드 `include_images`, `include_tables_csv` |
+| `POST` | `/api/jobs` | multipart 업로드(다중). 폼필드 `include_images`, `include_tables_csv` (둘 다 기본 `false`) |
 | `POST` | `/api/convert` | **동기 변환.** PDF 1개(`file`) → 마크다운 본문 (text/plain) |
 | `GET` | `/api/jobs` | `{jobs, busy}` — 내 잡 목록(+admin 시 전체), 대기 잡엔 `ahead` |
 | `GET` | `/api/events` | SSE. `{jobs, busy}` 변경분 push |
-| `GET` | `/api/jobs/{id}/preview` | 마크다운 원문 (text/plain) |
+| `GET` | `/api/jobs/{id}/preview` | 마크다운 원문 (text/plain). UI의 "MD 내려받기"도 이걸 파일로 저장 |
 | `GET` | `/api/jobs/{id}/download` | 결과 `result.zip` |
 | `GET` | `/api/download-all` | 완료 잡들을 파일명별 폴더로 묶은 단일 ZIP |
 
