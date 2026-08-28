@@ -13,6 +13,8 @@ MAX_BYTES = 100 * 1024 * 1024
 # 5g 안에 든다 — queue_max_size=2와 그림 크롭 skip 덕에 메모리가 페이지 수에 거의
 # 비례하지 않는다(100p 1.87GB → 940p 3.18GB). 다만 "이미지 포함"을 켜면 크롭이
 # 살아나 178p에서 +73%였으므로, 1000p에 가까운 문서로 켜면 5g를 넘겨 OOM이 날 수 있다.
+# GPU 오버레이는 queue_max_size가 16(CPU는 2)이라 인플라이트 페이지 비트맵이 더 쌓인다
+# — 1000p는 GPU 경로에서 미실측이다. PDF2MD_WORKER_MEM을 8g로 낮춘 랩탑이면 여기도 낮춘다.
 # ponytail: 환경변수 손잡이, 호스트 RAM이 다르면 여기만 낮춘다.
 MAX_PAGES = int(os.environ.get("PDF2MD_MAX_PAGES", "1000"))
 MAX_QUEUED_PER_SESSION = 20
