@@ -756,6 +756,13 @@ def test_upload_creates_queued_job(client):
     assert "sid" in r.cookies
 
 
+def test_upload_defaults_to_no_images_no_csv(client):
+    # 옵션 미지정 = 본문만. UI 체크박스도 기본 해제라 여기가 UI 기본값과 같아야 한다.
+    r = client.post("/api/jobs",
+                    files={"files": ("a.pdf", _pdf_bytes(), "application/pdf")})
+    assert r.json()[0]["opts_hash"] == convert.opts_hash(False, False)
+
+
 def test_upload_rejects_non_pdf(client):
     r = client.post("/api/jobs",
                     files={"files": ("x.pdf", b"PK\x03\x04not a pdf", "application/pdf")},
@@ -1037,12 +1044,15 @@ def test_upload_rejects_oversize(client, monkeypatch):
 
 
 def test_upload_rejects_too_many_pages(client, monkeypatch):
+    from app import web
     monkeypatch.setattr(config, "MAX_PAGES", 0)
     r = client.post("/api/jobs", files={"files": ("a.pdf", _pdf_bytes(), "application/pdf")},
                     data={"include_images": "true", "include_tables_csv": "true"})
     job = r.json()[0]
     assert job["status"] == "failed"
-    assert "500페이지" in job["error"]
+    # 문구는 import 시점의 MAX_PAGES로 굳는다(monkeypatch는 판정에만 영향) — 상한을
+    # 조정해도 안 깨지도록 web의 상수와 대조한다.
+    assert job["error"] == web._TOO_MANY_PAGES
 
 
 def test_upload_rejects_textless_pdf(client, monkeypatch):

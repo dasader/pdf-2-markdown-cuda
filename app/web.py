@@ -109,8 +109,8 @@ def _fail(conn, jid, sid, filename, oh, error, *, sha="-", page_total=None):
 @app.post("/api/jobs")
 async def create_jobs(request: Request,
                       files: Optional[list[UploadFile]] = None,
-                      include_images: str = Form("true"),
-                      include_tables_csv: str = Form("true")):
+                      include_images: str = Form("false"),
+                      include_tables_csv: str = Form("false")):
     sid = _sid(request)
     inc_img = include_images == "true"
     inc_csv = include_tables_csv == "true"
