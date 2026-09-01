@@ -176,6 +176,59 @@ certs/에 둔 인증서는 OS 신뢰 저장소와 **certifi 번들 양쪽에** �
 빌드는 모델을 못 받으면 **거기서 실패한다**(예전에는 `|| true`로 넘어가 정상처럼 보이는
 이미지가 나왔고, 그 사실이 잡마다 터지는 런타임 오류로만 드러났다).
 
+## OCR·차트 추출 (GPU 전용)
+
+업로드 옵션 두 개가 **GPU로 띄운 서버에서만** 나타난다(`docker-compose.gpu.yml`이 web·worker
+양쪽에 `PDF2MD_GPU=1`을 넣고, UI는 `GET /api/jobs`의 `gpu` 플래그로 판단한다). CPU 서버에
+`include_ocr=true`로 API를 직접 때리면 잡이 사유와 함께 `failed`가 된다 — 조용히 끄고
+변환해서 "OCR이 돈 줄 아는" 빈 결과를 돌려주지 않는다.
+
+| 옵션 | 하는 일 | 마크다운에 들어가는 형태 |
+|---|---|---|
+| `OCR로 읽기` (`include_ocr`) | 이미지·스캔본 속 **글자**를 텍스트로 | 본문 텍스트에 그대로 섞인다 |
+| `차트를 표로` (`include_charts`) | 차트 그림을 **수치 데이터로 복원** | 진짜 마크다운 **표** |
+
+OCR은 **설명을 만들어내지 않는다.** 차트 이미지에 OCR을 걸면 축 라벨·범례 같은 *글자*만
+나온다. 그림을 데이터로 되살리는 건 `차트를 표로` 쪽이다.
+
+### 왜 EasyOCR인가
+
+docling 기본 OCR은 RapidOCR인데 지원 언어가 `chinese/english/latin`뿐이라 **한글을 아예 못
+읽는다**(`RapidOcrModel._models_by_language`로 확인). EasyOCR에는 `korean_g2`가 있어 이쪽을
+쓴다. 모델(craft 검출기 + korean_g2 + english_g2, 114MB)은 빌드 타임에 이미지로 들어가고
+런타임은 `artifacts_path`로 그걸 가리킨다 — 여전히 **오프라인**이다.
+
+docling은 OCR 입력을 원본 해상도가 아니라 **216 DPI(`scale=3`)로 다시 렌더**해서 넣는다.
+
+### VRAM
+
+| 구성 | VRAM(추정) | 6GB | 8GB |
+|---|---|---|---|
+| 레이아웃 + TableFormer (기본) | ~1.5GB | ✅ | ✅ |
+| + OCR 한국어 | ~2.5GB | ✅ | ✅ |
+| + 차트 `granite-vision` (2B, 가중치 6.2GB) | ~7GB | ❌ | ⚠️ 빠듯 |
+| + 차트 `granite-vision-v4` (4B, 8.0GB) | ~11GB | ❌ | ❌ |
+
+**OCR은 6GB 카드에서도 넉넉하다.** 차트 추출은 8GB에서 `PDF2MD_GPU_BATCH=1`까지 낮춰야
+겨우 들어가고, 편하게 쓰려면 12GB 이상이 필요하다. docling이 차트 모델을 `bfloat16`으로
+고정 로드하고 양자화 손잡이를 주지 않아 더 줄일 여지가 없다.
+
+`v4`로 올리려면 Dockerfile에서 `with_granite_chart_extraction_v4=True`로 바꿔 재빌드하고
+`PDF2MD_CHART_MODEL=granite-vision-v4`로 맞춘다 — 런타임은 인터넷을 쓰지 않으므로 모델을
+안 구운 채 값만 바꾸면 변환이 실패한다.
+
+### 한국어 OCR 품질
+
+이 파이프라인의 한계를 정직하게 적어둔다. 164 DPI로 스캔된 2009년 공문서 16쪽 실측:
+
+- 기관명·제목처럼 큰 글자는 대체로 정확(`한국생명공학연구원(KRIBB)`, `국방과학연구소(ADD)`)
+- **조사가 자주 틀린다** — `등을`→`등올`, `특정평가를`→`특정평가루`, `거쳐`→`거처`
+- **숫자·기호 혼동** — `2009`→`2OO9`, `16개`→`167`, `'09년`→`'0년`, 낫표 `「`→`r`
+- 없던 공백이 끼어든다 — `원자력`→`원 자력`, `기획평가원`→`기 확평가원`
+- 신뢰도 0.5 미만이 본문 페이지에서 약 17%
+
+즉 **읽을 수는 있으나 그대로 인용할 수는 없다.** 원문 대조가 필요한 용도라면 검수를 전제로 쓴다.
+
 ## 설정 (`.env`)
 
 | 변수 | 기본값 | 설명 |
@@ -186,6 +239,8 @@ certs/에 둔 인증서는 OS 신뢰 저장소와 **certifi 번들 양쪽에** �
 | `PDF2MD_DATA` | `/data` | 데이터 루트 (compose가 `./data`에 마운트) |
 | `PDF2MD_GPU_BATCH` | `4` | GPU 배치 크기. **CUDA일 때만** 적용. CUDA OOM이면 2 → 1로 |
 | `PDF2MD_WORKER_MEM` | `12g` | worker RAM 천장. **GPU 오버레이에서만** 적용. RAM 16GB 랩탑이면 `8g` |
+| `PDF2MD_GPU` | (빈값) | `1`이면 UI에 OCR·차트 옵션을 띄운다. **GPU 오버레이가 자동으로 넣는다** |
+| `PDF2MD_CHART_MODEL` | `granite-vision` | 차트→표 모델. `granite-vision-v4`는 VRAM 12GB 이상 + 재빌드 필요 |
 
 ## 아키텍처
 
@@ -212,7 +267,8 @@ docker compose (이미지 1개, 서비스 2개)
 Docling. 장치는 `device='auto'` — GPU가 보이면 CUDA, 아니면 CPU다(위 [GPU 가속](#gpu-가속-nvidia--cuda) 참고).
 장치별로 배치·큐만 달라지고 나머지 설정과 출력은 같다.
 
-- `do_ocr=False` (텍스트 PDF 전제 → OCR 모델 미로딩, ~2GB 절감)
+- `do_ocr=False`가 기본 (텍스트 PDF 전제 → OCR 모델 미로딩). **GPU로 띄운 서버에서만**
+  업로드 시 `OCR로 읽기`·`차트를 표로`를 켤 수 있다 — 아래 [OCR·차트 추출](#ocr차트-추출-gpu-전용) 참고.
 - `TableFormerMode.ACCURATE` (표 정확도 우선)
 - 배치·큐를 CPU에서는 `1/1/2`까지 깎아 저사양 호스트(16GB, `mem_limit` 5g)에서 178페이지·표
   87개 문서를 3.3GB로 변환한다. GPU에서는 이 값이 되레 카드를 굶기므로 `4/4/16`으로 올린다.
@@ -249,9 +305,9 @@ docling 출력을 그대로 쓰면 공문서 조판 특유의 잡음이 남는�
 | 메서드 | 경로 | 설명 |
 |---|---|---|
 | `GET` | `/` | 웹 UI |
-| `POST` | `/api/jobs` | multipart 업로드(다중). 폼필드 `include_images`, `include_tables_csv` (둘 다 기본 `false`) |
+| `POST` | `/api/jobs` | multipart 업로드(다중). 폼필드 `include_images`, `include_tables_csv`, `include_ocr`, `include_charts` (모두 기본 `false`) |
 | `POST` | `/api/convert` | **동기 변환.** PDF 1개(`file`) → 마크다운 본문 (text/plain) |
-| `GET` | `/api/jobs` | `{jobs, busy}` — 내 잡 목록(+admin 시 전체), 대기 잡엔 `ahead` |
+| `GET` | `/api/jobs` | `{jobs, busy, gpu}` — 내 잡 목록(+admin 시 전체), 대기 잡엔 `ahead`. `gpu`는 OCR·차트 옵션 노출 여부 |
 | `GET` | `/api/events` | SSE. `{jobs, busy}` 변경분 push |
 | `GET` | `/api/jobs/{id}/preview` | 마크다운 원문 (text/plain). UI의 "MD 내려받기"도 이걸 파일로 저장 |
 | `GET` | `/api/jobs/{id}/download` | 결과 `result.zip` |
@@ -289,7 +345,8 @@ curl -F file=@doc.pdf http://<host>:8001/api/convert     # → 마크다운 본�
   (변환을 몇 분 돌린 끝에 빈 결과를 받는 일이 없다). 세션당 대기 잡 20개 상한.
 - 저장 파일명은 항상 SHA-256(요청 경로 신뢰 안 함). 다운로드/미리보기 경로는 DB에서만 해석.
 - 결과는 **24시간 보관** 후 워커가 참조 카운트 기준으로 정리.
-- 스캔본(이미지 PDF) OCR·수식 LaTeX 변환은 미지원(업로드 단계에서 거부).
+- 스캔본(이미지 PDF)은 기본적으로 업로드 단계에서 거부하지만, GPU 서버에서 `OCR로 읽기`를
+  켜면 통과시킨다(그게 이 문서를 읽는 수단이므로). 수식 LaTeX 변환은 여전히 미지원.
 
 ## 개발 / 테스트
 

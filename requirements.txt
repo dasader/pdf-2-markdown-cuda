@@ -29,3 +29,7 @@ docling==2.111.0
 # docling의 제약은 <8.0.0,>=7.0.0으로 느슨해 이 핀이 없으면 재빌드 시점에 따라
 # 결과가 달라진다.
 docling-parse>=7.8.1
+# OCR 엔진. docling 기본은 RapidOCR인데 지원 언어가 chinese/english/latin뿐이라
+# 한글을 못 읽는다(_models_by_language로 확인). EasyOCR은 korean_g2가 있다.
+# torch 위에서 도니 CUDA도 그대로 탄다 — 별도 런타임이 늘지 않는다.
+easyocr

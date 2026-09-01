@@ -16,6 +16,11 @@ services:
     environment:
       # 기본 compose의 worker에는 environment 블록이 없다 — CUDA 전용 손잡이라 여기 둔다.
       PDF2MD_GPU_BATCH: "${PDF2MD_GPU_BATCH:-4}"
+      PDF2MD_GPU: "1"
+      # 차트→표 추출 모델. granite-vision(2B)이 기본 — VRAM 8GB에서 빠듯하게 돈다.
+      # 12GB 이상이면 granite-vision-v4(4B)가 더 정확하지만 Dockerfile에서 그 모델을
+      # 받도록 바꿔 재빌드해야 한다(런타임은 인터넷을 쓰지 않는다).
+      PDF2MD_CHART_MODEL: "${PDF2MD_CHART_MODEL:-granite-vision}"
     deploy:
       resources:
         reservations:
@@ -33,3 +38,10 @@ services:
     memswap_limit: "${PDF2MD_WORKER_MEM:-12g}"
 
   # web은 변환을 하지 않는다(업로드 검증·큐잉·정적 파일만) — GPU를 주지 않는다.
+  # 다만 OCR·차트 체크박스를 UI에 띄울지 정해야 하는데, GPU가 없으니 스스로는 알 수
+  # 없다. worker와 같은 오버레이로만 뜬다는 사실을 이용해 플래그를 그대로 받는다.
+  web:
+    environment:
+      PDF2MD_ADMIN_KEY: "${PDF2MD_ADMIN_KEY:-}"
+      PDF2MD_SEC_PER_PAGE: "${PDF2MD_SEC_PER_PAGE:-1.5}"
+      PDF2MD_GPU: "1"

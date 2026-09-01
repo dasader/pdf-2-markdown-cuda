@@ -96,6 +96,8 @@ h1 { margin:0; font-size:27px; font-weight:600; letter-spacing:-.02em; text-wrap
   border:none; cursor:pointer; padding:0; border-bottom:1.5px solid transparent; transition:border-color .15s; }
 .downall:hover { border-color:var(--ink); }
 .downall.hide { display:none; }
+/* GPU로 띄운 서버에서만 보이는 옵션 — /api/jobs의 gpu 플래그로 토글한다 */
+.opts .gpu-only.hide { display:none; }
 .downall.danger { color:var(--fail); }
 .downall.danger:hover { border-color:var(--fail); }
 
