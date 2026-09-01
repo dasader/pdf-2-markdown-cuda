@@ -1109,3 +1109,109 @@ def test_perf_knobs_gpu_batch_env_knob(monkeypatch):
 def test_cuda_available_false_without_torch():
     """torch가 없으면 예외 대신 False → CPU 설정으로 되돌아간다(테스트가 이 경로다)."""
     assert convert._cuda_available() is False
+
+
+def _done_job(conn, jid, *, session, filename, sha, opts="O", md="# hello"):
+    """result_dir에 doc.md(+부산물)까지 만들어 둔 done 잡."""
+    res_dir = config.RESULTS_DIR / f"{sha}-{opts}"
+    res_dir.mkdir(parents=True, exist_ok=True)
+    (res_dir / "doc.md").write_text(md, encoding="utf-8")
+    (res_dir / "tables").mkdir(exist_ok=True)
+    (res_dir / "tables" / "t1.csv").write_text("a,b\n")
+    db.create_job(conn, id=jid, session_id=session, filename=filename, sha256=sha,
+                  opts_hash=opts, status="queued", page_total=1)
+    db.finish_job(conn, jid, status="done", result_dir=str(res_dir))
+    return res_dir
+
+
+def test_download_all_md_only(client):
+    conn = db.connect()
+    _done_job(conn, "m1", session="s-md", filename="가.pdf", sha="MA", md="# 가")
+    _done_job(conn, "m2", session="s-md", filename="나.pdf", sha="MB", md="# 나")
+    conn.close()
+    client.cookies.set("sid", "s-md")
+
+    r = client.get("/api/download-all?md=1")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/zip"
+    zf = zipfile.ZipFile(BytesIO(r.content))
+    # 폴더 없이 {원본이름}.md 만, 표 CSV 같은 부산물은 빠진다
+    assert sorted(zf.namelist()) == ["가.md", "나.md"]
+    assert zf.read("가.md").decode("utf-8") == "# 가"
+
+
+def test_download_all_md_dedups_same_stem(client):
+    conn = db.connect()
+    _done_job(conn, "d1", session="s-dup", filename="같은.pdf", sha="DA", md="첫째")
+    _done_job(conn, "d2", session="s-dup", filename="같은.pdf", sha="DB", md="둘째")
+    conn.close()
+    client.cookies.set("sid", "s-dup")
+
+    zf = zipfile.ZipFile(BytesIO(client.get("/api/download-all?md=1").content))
+    assert sorted(zf.namelist()) == ["같은-1.md", "같은.md"]
+
+
+def test_download_all_without_md_still_zips_everything(client):
+    conn = db.connect()
+    _done_job(conn, "f1", session="s-full", filename="문서.pdf", sha="FA")
+    conn.close()
+    client.cookies.set("sid", "s-full")
+
+    zf = zipfile.ZipFile(BytesIO(client.get("/api/download-all").content))
+    assert "문서/doc.md" in zf.namelist()
+    assert "문서/tables/t1.csv" in zf.namelist()
+
+
+def test_delete_done_clears_only_own_done(client):
+    conn = db.connect()
+    _done_job(conn, "own", session="s-me", filename="내것.pdf", sha="OA")
+    _done_job(conn, "other", session="s-you", filename="남것.pdf", sha="OB")
+    db.create_job(conn, id="pending", session_id="s-me", filename="대기.pdf",
+                  sha256="OC", opts_hash="O", status="queued", page_total=1)
+    conn.close()
+    client.cookies.set("sid", "s-me")
+
+    r = client.delete("/api/delete-done")
+    assert r.status_code == 200
+    assert r.json() == {"deleted": 1}
+
+    conn = db.connect()
+    try:
+        assert db.get_job(conn, "own") is None
+        assert db.get_job(conn, "other") is not None   # 다른 세션은 그대로
+        assert db.get_job(conn, "pending") is not None  # 대기 잡은 남는다
+    finally:
+        conn.close()
+
+
+def test_delete_done_as_admin_clears_all_sessions(client):
+    conn = db.connect()
+    _done_job(conn, "a1", session="s-a", filename="a.pdf", sha="AA")
+    _done_job(conn, "a2", session="s-b", filename="b.pdf", sha="AB")
+    conn.close()
+
+    r = client.delete("/api/delete-done", headers={"X-Admin-Key": "secret"})
+    assert r.json() == {"deleted": 2}
+    conn = db.connect()
+    try:
+        assert db.get_job(conn, "a1") is None and db.get_job(conn, "a2") is None
+    finally:
+        conn.close()
+
+
+def test_delete_done_keeps_result_files_for_sweep(client):
+    # 행만 지운다 — 결과 폴더 삭제는 워커 sweep의 몫이다(다른 세션이 같은 폴더를
+    # 캐시로 공유할 수 있으므로 여기서 지우면 남의 잡이 깨진다).
+    conn = db.connect()
+    res_dir = _done_job(conn, "k1", session="s-keep", filename="k.pdf", sha="KA")
+    conn.close()
+    client.cookies.set("sid", "s-keep")
+
+    client.delete("/api/delete-done")
+    assert (res_dir / "doc.md").exists()
+
+
+def test_delete_done_on_empty_list_is_noop(client):
+    r = client.delete("/api/delete-done")
+    assert r.status_code == 200
+    assert r.json() == {"deleted": 0}

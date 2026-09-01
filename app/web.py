@@ -270,7 +270,8 @@ def download(request: Request, job_id: str):
 
 
 @app.get("/api/download-all")
-def download_all(request: Request):
+def download_all(request: Request, md: int = 0):
+    """완료된 잡을 한 번에 내려받는다. md=1이면 doc.md만 평평하게 담는다."""
     conn = db.connect()
     try:
         rows = db.list_jobs(conn, _sid(request), admin=_is_admin(request))
@@ -293,6 +294,13 @@ def download_all(request: Request):
                 n = used.get(base, 0)
                 used[base] = n + 1
                 folder = base if n == 0 else f"{base}-{n}"
+                if md:
+                    # ponytail: 폴더 없이 {원본이름}.md 한 장씩. 이름 충돌은 폴더와
+                    # 같은 -1, -2 접미사 규칙을 그대로 쓴다.
+                    doc = src / "doc.md"
+                    if doc.exists():
+                        z.write(doc, f"{folder}.md")
+                    continue
                 for f in sorted(src.rglob("*")):
                     if f.is_file():
                         z.write(f, f"{folder}/{f.relative_to(src)}")
@@ -301,9 +309,27 @@ def download_all(request: Request):
         raise
 
     return FileResponse(
-        tmp_name, filename="pdf2md-변환결과.zip", media_type="application/zip",
+        tmp_name,
+        filename="pdf2md-마크다운.zip" if md else "pdf2md-변환결과.zip",
+        media_type="application/zip",
         background=BackgroundTask(os.unlink, tmp_name),
     )
+
+
+@app.delete("/api/delete-done")
+def delete_done(request: Request):
+    """완료 목록 비우기. 되돌릴 수 없으므로 UI에서 확인을 한 번 더 받는다.
+
+    ponytail: 행만 지우고 결과 파일은 워커 sweep(5분 주기)이 참조 없는 것부터
+    치운다 — 여기서 rmtree하면 같은 결과 폴더를 캐시로 공유하는 다른 세션의 잡이
+    깨진다. done 행이 곧 변환 캐시이므로, 비운 뒤 같은 PDF를 올리면 새로 변환한다.
+    """
+    conn = db.connect()
+    try:
+        n = db.delete_done(conn, _sid(request), admin=_is_admin(request))
+    finally:
+        conn.close()
+    return JSONResponse({"deleted": n})
 
 
 @app.get("/api/events")
