@@ -438,7 +438,7 @@ def test_convert_passes_include_images_to_pipeline(tmp_path, monkeypatch):
         def convert(self, _):
             return FakeResult()
 
-    def fake_build(*, picture_images=True, do_ocr=False, do_charts=False):
+    def fake_build(*, picture_images=True):
         seen.append(picture_images)
         return FakeConverter()
 
@@ -1088,7 +1088,7 @@ def test_web_self_initializes_storage_without_worker(tmp_path, monkeypatch):
         assert config.DB_PATH.exists()
         r = c.get("/api/jobs")
         assert r.status_code == 200
-        assert r.json() == {"jobs": [], "busy": False, "gpu": False}
+        assert r.json() == {"jobs": [], "busy": False}
 
 
 def test_perf_knobs_gpu_batches_beat_cpu():
@@ -1215,93 +1215,3 @@ def test_delete_done_on_empty_list_is_noop(client):
     r = client.delete("/api/delete-done")
     assert r.status_code == 200
     assert r.json() == {"deleted": 0}
-
-
-# --- OCR / 차트 추출 옵션 ---
-
-
-def test_opts_hash_includes_ocr_and_chart_flags():
-    base = convert.opts_hash(True, True)
-    assert base != convert.opts_hash(True, True, True, False)
-    assert base != convert.opts_hash(True, True, False, True)
-    assert convert.opts_hash(True, True, True, True) != convert.opts_hash(True, True, True, False)
-    # 옛 2인자 호출은 ocr=False, chart=False와 같은 해시여야 한다(캐시 호환).
-    assert base == convert.opts_hash(True, True, False, False)
-
-
-def test_opt_combos_round_trip():
-    # worker가 opts_hash만 보고 원래 옵션을 되짚을 수 있어야 한다.
-    assert len(convert.OPT_COMBOS) == 16
-    hashes = {convert.opts_hash(*c): c for c in convert.OPT_COMBOS}
-    assert len(hashes) == 16                      # 충돌 없음
-    for combo in convert.OPT_COMBOS:
-        assert hashes[convert.opts_hash(*combo)] == combo
-
-
-def test_convert_refuses_ocr_without_cuda(monkeypatch, tmp_path):
-    monkeypatch.setattr(convert, "_cuda_available", lambda: False)
-    with pytest.raises(RuntimeError) as e:
-        convert.convert(FIX, tmp_path / "out", include_images=False,
-                        include_tables_csv=False, do_ocr=True)
-    assert "GPU" in str(e.value)
-    with pytest.raises(RuntimeError):
-        convert.convert(FIX, tmp_path / "out", include_images=False,
-                        include_tables_csv=False, do_charts=True)
-
-
-def test_upload_rejects_ocr_when_no_gpu(client, monkeypatch):
-    from app import web
-    monkeypatch.setattr(config, "GPU_ENABLED", False)
-    r = client.post("/api/jobs", files={"files": ("a.pdf", _pdf_bytes(), "application/pdf")},
-                    data={"include_ocr": "true"})
-    job = r.json()[0]
-    assert job["status"] == "failed"
-    assert job["error"] == web._GPU_ONLY
-
-
-def test_upload_accepts_ocr_when_gpu(client, monkeypatch):
-    monkeypatch.setattr(config, "GPU_ENABLED", True)
-    r = client.post("/api/jobs", files={"files": ("a.pdf", _pdf_bytes(), "application/pdf")},
-                    data={"include_ocr": "true"})
-    assert r.json()[0]["status"] == "queued"
-
-
-def test_ocr_lets_textless_pdf_through(client, monkeypatch):
-    # OCR이 바로 이 문서를 읽는 수단이므로 스캔본 가드를 통과시켜야 한다.
-    monkeypatch.setattr(config, "MIN_TEXT_CHARS", 10_000)
-    monkeypatch.setattr(config, "GPU_ENABLED", True)
-    r = client.post("/api/jobs", files={"files": ("a.pdf", _pdf_bytes(), "application/pdf")},
-                    data={"include_ocr": "true"})
-    assert r.json()[0]["status"] == "queued"
-
-    # OCR을 끄면 종전대로 거른다.
-    r2 = client.post("/api/jobs", files={"files": ("b.pdf", _pdf_bytes(), "application/pdf")},
-                     data={"include_ocr": "false"})
-    assert "스캔본" in r2.json()[0]["error"]
-
-
-def test_jobs_endpoint_exposes_gpu_flag(client, monkeypatch):
-    monkeypatch.setattr(config, "GPU_ENABLED", True)
-    assert client.get("/api/jobs").json()["gpu"] is True
-    monkeypatch.setattr(config, "GPU_ENABLED", False)
-    assert client.get("/api/jobs").json()["gpu"] is False
-
-
-def test_worker_passes_ocr_flags_to_convert(conn, monkeypatch):
-    # opts_hash 역산이 ocr/chart까지 정확히 복원해 convert로 넘기는지.
-    oh = convert.opts_hash(False, False, True, True)
-    db.create_job(conn, id="jo", session_id="s", filename="a.pdf", sha256="SHA",
-                  opts_hash=oh, status="queued", page_total=1)
-    seen = {}
-
-    def fake_convert(pdf, out, *, include_images, include_tables_csv,
-                     do_ocr=False, do_charts=False):
-        seen.update(ocr=do_ocr, charts=do_charts,
-                    img=include_images, csv=include_tables_csv)
-        Path(out).mkdir(parents=True, exist_ok=True)
-        return 0, 0
-
-    monkeypatch.setattr(convert, "convert", fake_convert)
-    worker.process_one(conn)
-    assert seen == {"ocr": True, "charts": True, "img": False, "csv": False}
-    assert db.get_job(conn, "jo")["status"] == "done"

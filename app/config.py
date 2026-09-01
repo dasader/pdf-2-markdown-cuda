@@ -22,16 +22,6 @@ MAX_QUEUED_PER_SESSION = 20
 # 이라 스캔본은 빈 doc.md로 '성공'해버린다. 페이지 번호만 찍힌 스캔본까지 잡되 짧은
 # 정상 문서는 통과시키는 선. ponytail: 실측으로 조정하는 손잡이, 자동 판별은 과잉.
 MIN_TEXT_CHARS = int(os.environ.get("PDF2MD_MIN_TEXT_CHARS", "10"))
-
-# OCR·차트 추출을 UI에 노출할지. web 컨테이너에는 GPU가 붙지 않아 스스로 판별할 수
-# 없으므로, docker-compose.gpu.yml이 web·worker 양쪽에 넣어주는 값을 본다. 워커는
-# 이 값을 믿지 않고 실제 torch.cuda로 한 번 더 확인하고, 어긋나면 잡을 실패시킨다
-# (조용히 OCR 없이 변환해 빈 결과를 '성공'으로 돌려주는 게 제일 나쁘다).
-GPU_ENABLED = os.environ.get("PDF2MD_GPU", "") == "1"
-# 차트→표 추출 모델. granite-vision(2B, 가중치 6.2GB)이 기본이고 VRAM 8GB에서
-# 빠듯하게 돈다. granite-vision-v4(4B, 8.0GB)는 12GB 이상에서만 권한다.
-# 바꾸면 Dockerfile이 굽는 모델도 같이 바꿔야 한다 — 런타임은 인터넷을 쓰지 않는다.
-CHART_MODEL = os.environ.get("PDF2MD_CHART_MODEL", "granite-vision")
 SEC_PER_PAGE = float(os.environ.get("PDF2MD_SEC_PER_PAGE", "1.5"))
 RETENTION_SEC = 24 * 3600
 

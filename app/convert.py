@@ -8,8 +8,6 @@ from pathlib import Path
 
 import pypdfium2  # docling이 이미 의존하는 PDF 백엔드
 
-from app import config
-
 
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
@@ -59,24 +57,12 @@ def probe(path) -> tuple[int, int]:
 #          PUA 글리프 제거 + 어절 자간 잔재("체계성  -  부처") 정리
 #   rev 7: docling-parse 7.8.1 — 붙어 나오던 한글 어절이 풀리고 목차 표의 쪽번호가
 #          제 셀로 들어간다. 본문이 달라지므로 7.7.0으로 만든 캐시는 버려야 한다.
-#   rev 8: OCR(EasyOCR 한국어)·차트→표 추출 옵션 추가. opts_hash에 두 플래그가
-#          섞이므로 옛 캐시는 자연히 무효화된다.
-CONVERTER_REV = 8
+CONVERTER_REV = 7
 
 
-def opts_hash(include_images: bool, include_tables_csv: bool,
-              do_ocr: bool = False, do_charts: bool = False) -> str:
-    # 기본값을 둬서 옛 호출부(그림·CSV 두 옵션만 쓰던 곳)의 해시가 그대로 유지된다.
-    key = (f"rev={CONVERTER_REV};img={int(include_images)};csv={int(include_tables_csv)}"
-           f";ocr={int(do_ocr)};chart={int(do_charts)}")
+def opts_hash(include_images: bool, include_tables_csv: bool) -> str:
+    key = f"rev={CONVERTER_REV};img={int(include_images)};csv={int(include_tables_csv)}"
     return hashlib.sha256(key.encode()).hexdigest()[:16]
-
-
-# 옵션 조합 전수. worker가 opts_hash만 보고 원래 옵션을 되짚을 때 쓴다.
-# ponytail: 16조합 완전탐색 — 옵션이 더 늘면 그때 jobs에 컬럼을 추가한다.
-OPT_COMBOS = [(i, c, o, ch)
-              for i in (True, False) for c in (True, False)
-              for o in (True, False) for ch in (True, False)]
 
 
 # 공문서 불릿 기호 → 목록 깊이. docling은 이 기호를 본문 글자로 남기므로 "- ㅇ 내용"
@@ -419,8 +405,7 @@ def _perf_knobs(cuda: bool) -> dict:
 # 두 벌을 얹기 싫다. 옵션이 번갈아 오면 지금처럼 다시 만들 뿐 더 나빠지지 않는다.
 # peak 메모리는 그대로다 — 잡을 도는 동안에는 어차피 모델이 떠 있다.
 @lru_cache(maxsize=1)
-def _build_converter(*, picture_images: bool = True,
-                     do_ocr: bool = False, do_charts: bool = False):
+def _build_converter(*, picture_images: bool = True):
     # 지연 import: 테스트가 torch 없이 돌게 함.
     from docling.datamodel.backend_options import PdfBackendOptions
     from docling.datamodel.base_models import InputFormat
@@ -434,23 +419,7 @@ def _build_converter(*, picture_images: bool = True,
     # 단어에 다시 붙인다("저물고," → "저물고, 고,"). 본문·표·CSV가 모두 오염됐다.
     #
     opts = PdfPipelineOptions()
-    # 기본은 끈 채로 둔다 — 텍스트 PDF에는 필요 없고, 모델을 안 올리면 VRAM·시간이
-    # 그만큼 빈다. 켜는 경로는 GPU에서만 열린다(convert()가 먼저 막는다).
-    opts.do_ocr = do_ocr
-    if do_ocr:
-        from docling.datamodel.pipeline_options import EasyOcrOptions
-        # docling 기본 OCR은 RapidOCR인데 지원 언어가 chinese/english/latin뿐이라
-        # 한글을 아예 못 읽는다(_models_by_language로 확인). 그래서 EasyOCR을 쓴다.
-        # 모델 경로·오프라인 여부는 docling이 opts.artifacts_path에서 유도한다
-        # (artifacts_path/EasyOcr, download_enabled=False) — 런타임 인터넷 불필요.
-        opts.ocr_options = EasyOcrOptions(lang=["ko", "en"])
-    if do_charts:
-        from docling.datamodel.pipeline_options import ChartExtractionModelKind
-        # 차트 그림을 수치 표로 되살린다. 마크다운 직렬화기가 PictureTabularChartData를
-        # 진짜 표로 찍어주므로(enable_chart_tables 기본 True) 별도 후처리가 없다.
-        opts.do_chart_extraction = True
-        opts.chart_extraction_options.model = ChartExtractionModelKind(config.CHART_MODEL)
-        opts.chart_extraction_options.chart2csv = True
+    opts.do_ocr = False                       # 텍스트 PDF → OCR 모델 미로딩(~2GB 절감)
     opts.do_table_structure = True
     opts.table_structure_options.mode = TableFormerMode.ACCURATE
     opts.images_scale = 1.25
@@ -498,9 +467,7 @@ def _build_converter(*, picture_images: bool = True,
     # 이 줄이 cpu면 --gpus나 nvidia-container-toolkit이 빠진 것이다.
     print(f"[pdf2md] device={'cuda' if cuda else 'cpu'} "
           f"layout_batch={opts.layout_batch_size} table_batch={opts.table_batch_size} "
-          f"queue={opts.queue_max_size} threads={_usable_cpus()} "
-          f"ocr={int(do_ocr)} charts={int(do_charts)}"
-          f"{'(' + config.CHART_MODEL + ')' if do_charts else ''}", flush=True)
+          f"queue={opts.queue_max_size} threads={_usable_cpus()}", flush=True)
 
     # 속도: docling 기본 num_threads는 4로 고정인데 torch 자체 기본값은 코어 수다 —
     # 6코어 호스트에서 docling이 오히려 낮춰 잡고 있었다. 실측(코어 6, 51p, 2회 평균):
@@ -530,24 +497,12 @@ def _build_converter(*, picture_images: bool = True,
     )
 
 
-GPU_ONLY = ("OCR·차트 추출은 GPU(CUDA)에서만 동작합니다. 이 워커에는 GPU가 "
-            "보이지 않습니다 — docker-compose.gpu.yml로 띄웠는지, "
-            "nvidia-container-toolkit이 설치돼 있는지 확인하세요.")
-
-
-def convert(pdf_path, out_dir, *, include_images: bool, include_tables_csv: bool,
-            do_ocr: bool = False, do_charts: bool = False):
-    # GPU가 없으면 조용히 OCR 없이 변환하지 않고 실패시킨다. 스캔본을 OCR로 읽어달라고
-    # 올렸는데 빈 doc.md가 '성공'으로 돌아오는 게 이 서비스의 가장 나쁜 실패 모드다.
-    if (do_ocr or do_charts) and not _cuda_available():
-        raise RuntimeError(GPU_ONLY)
-
+def convert(pdf_path, out_dir, *, include_images: bool, include_tables_csv: bool):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     md_path = out_dir / "doc.md"
 
-    result = _build_converter(picture_images=include_images, do_ocr=do_ocr,
-                              do_charts=do_charts).convert(str(pdf_path))
+    result = _build_converter(picture_images=include_images).convert(str(pdf_path))
     doc = result.document
 
     try:

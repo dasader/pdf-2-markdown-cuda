@@ -5,9 +5,6 @@ const dropEl = $("#drop");
 const fileInput = $("#file");
 const optImg = $("#opt-img");
 const optCsv = $("#opt-csv");
-const optOcr = $("#opt-ocr");
-const optChart = $("#opt-chart");
-const gpuOnlyEls = [...document.querySelectorAll(".gpu-only")];
 const queueEl = $("#queue");
 const beatEl = $("#beat");
 const downallEl = $("#downall");
@@ -186,15 +183,6 @@ function applyFull(data) {
   state.clear();
   (data.jobs || []).forEach((j) => state.set(j.id, j));
   busy = !!data.busy;
-  // gpu는 /api/jobs에만 실린다(SSE 프레임에는 없다). 값이 올 때만 반영해서,
-  // SSE 델타가 뒤늦게 도착해도 옵션이 깜빡이며 사라지지 않게 한다.
-  if ("gpu" in data) {
-    gpuOnlyEls.forEach((el) => el.classList.toggle("hide", !data.gpu));
-    if (!data.gpu) {
-      optOcr.checked = false;
-      optChart.checked = false;
-    }
-  }
   render();
 }
 
@@ -277,9 +265,6 @@ async function upload(files) {
   files.forEach((f) => fd.append("files", f));
   fd.append("include_images", optImg.checked ? "true" : "false");
   fd.append("include_tables_csv", optCsv.checked ? "true" : "false");
-  // GPU 서버가 아니면 체크박스가 숨어 있어 항상 false로 나간다.
-  fd.append("include_ocr", optOcr.checked ? "true" : "false");
-  fd.append("include_charts", optChart.checked ? "true" : "false");
   await apiFetch("/api/jobs", { method: "POST", body: fd });
   await refresh();
 }

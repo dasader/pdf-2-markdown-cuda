@@ -26,20 +26,20 @@ def process_one(conn) -> bool:
     sha, opts = job["sha256"], job["opts_hash"]
     pdf_path = config.UPLOADS_DIR / f"{sha}.pdf"
     out_dir = config.RESULTS_DIR / f"{sha}-{opts}"
-    # ponytail: opts 16조합 역산, 조합이 늘면 컬럼 추가
-    pair = next((combo for combo in convert.OPT_COMBOS
-                 if convert.opts_hash(*combo) == opts), None)
+    # ponytail: opts 4조합 역산, 조합이 늘면 컬럼 추가
+    pair = next(((i, c) for i in (True, False) for c in (True, False)
+                 if convert.opts_hash(i, c) == opts), None)
     if pair is None:
         # CONVERTER_REV가 올라간 뒤 남아있던 옛 queued 잡. 옵션을 복원할 수 없으므로
         # 조용히 기본값으로 변환해 요청과 다른 결과를 내보내는 대신 실패시킨다.
         db.finish_job(conn, job["id"], status="failed",
                       error="변환기가 업데이트되었습니다. 다시 업로드해 주세요.")
         return True
-    include_images, include_csv, do_ocr, do_charts = pair
+    include_images, include_csv = pair
     try:
         n_tables, n_images = convert.convert(
             pdf_path, out_dir, include_images=include_images,
-            include_tables_csv=include_csv, do_ocr=do_ocr, do_charts=do_charts)
+            include_tables_csv=include_csv)
         db.finish_job(conn, job["id"], status="done", result_dir=str(out_dir),
                        n_tables=n_tables, n_images=n_images)
     except Exception:

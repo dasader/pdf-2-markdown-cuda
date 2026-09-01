@@ -96,8 +96,7 @@ _TOO_MANY_PAGES = f"{config.MAX_PAGES}페이지를 초과합니다"
 _TOO_MANY_QUEUED = f"대기 잡이 너무 많습니다(최대 {config.MAX_QUEUED_PER_SESSION})"
 _BROKEN_PDF = "PDF를 열 수 없습니다(손상되었거나 암호로 보호된 파일)"
 _EMPTY_PDF = "페이지가 없는 PDF입니다"
-_NO_TEXT = "텍스트 레이어가 없습니다 — 스캔본(이미지) PDF는 'OCR로 읽기'를 켜세요"
-_GPU_ONLY = "OCR·차트 추출은 GPU로 띄운 서버에서만 쓸 수 있습니다"
+_NO_TEXT = "텍스트 레이어가 없습니다 — 스캔본(이미지) PDF는 OCR 미지원"
 
 
 def _fail(conn, jid, sid, filename, oh, error, *, sha="-", page_total=None):
@@ -111,25 +110,16 @@ def _fail(conn, jid, sid, filename, oh, error, *, sha="-", page_total=None):
 async def create_jobs(request: Request,
                       files: Optional[list[UploadFile]] = None,
                       include_images: str = Form("false"),
-                      include_tables_csv: str = Form("false"),
-                      include_ocr: str = Form("false"),
-                      include_charts: str = Form("false")):
+                      include_tables_csv: str = Form("false")):
     sid = _sid(request)
     inc_img = include_images == "true"
     inc_csv = include_tables_csv == "true"
-    # GPU 서버가 아니면 요청 자체를 거절한다. 조용히 무시하고 변환해버리면 사용자는
-    # OCR이 돈 줄 알고 빈 결과를 받는다 — 껐다는 사실이 어디에도 안 남는다.
-    want_gpu_feature = include_ocr == "true" or include_charts == "true"
-    inc_ocr = include_ocr == "true" and config.GPU_ENABLED
-    inc_chart = include_charts == "true" and config.GPU_ENABLED
-    oh = convert.opts_hash(inc_img, inc_csv, inc_ocr, inc_chart)
+    oh = convert.opts_hash(inc_img, inc_csv)
     conn = db.connect()
     out = []
     try:
         for uf in (files or []):
             jid = uuid.uuid4().hex
-            if want_gpu_feature and not config.GPU_ENABLED:
-                out.append(_fail(conn, jid, sid, uf.filename, oh, _GPU_ONLY)); continue
             # 가드레일: Starlette가 파트의 Content-Length로 채워주는 uf.size를 먼저
             # 확인해 초대형 업로드를 메모리에 통째로 읽기 전에 걸러낸다(OOM 방지).
             # uf.size가 없는(None) 경우에만 아래 read() 이후 len(data) 체크가 백스톱.
@@ -160,9 +150,8 @@ async def create_jobs(request: Request,
                 out.append(_fail(conn, jid, sid, uf.filename, oh,
                                  _TOO_MANY_PAGES, sha=sha, page_total=pages)); continue
             # 스캔본은 변환이 예외 없이 '성공'하고 빈 doc.md를 남긴다. 몇 분 기다린 끝에
-            # 빈 결과를 받지 않도록 업로드 시점에 거른다. OCR을 켰다면 그게 바로 이
-            # 문서를 읽는 수단이므로 거르지 않는다.
-            if not inc_ocr and text_chars < config.MIN_TEXT_CHARS:
+            # 빈 결과를 받지 않도록 업로드 시점에 거른다.
+            if text_chars < config.MIN_TEXT_CHARS:
                 out.append(_fail(conn, jid, sid, uf.filename, oh,
                                  _NO_TEXT, sha=sha, page_total=pages)); continue
 
@@ -192,8 +181,6 @@ async def convert_sync(request: Request,
                        file: UploadFile,
                        include_images: str = Form("false"),
                        include_tables_csv: str = Form("false"),
-                       include_ocr: str = Form("false"),
-                       include_charts: str = Form("false"),
                        timeout: float = Form(300)):
     """PDF 1개 → 마크다운 본문(text/plain). 외부 에이전트용 한 방 엔드포인트.
 
@@ -204,9 +191,7 @@ async def convert_sync(request: Request,
     """
     resp = await create_jobs(request, files=[file],
                              include_images=include_images,
-                             include_tables_csv=include_tables_csv,
-                             include_ocr=include_ocr,
-                             include_charts=include_charts)
+                             include_tables_csv=include_tables_csv)
     job_id = json.loads(resp.body)[0]["id"]
     conn = db.connect()
     try:
@@ -243,9 +228,6 @@ def list_jobs(request: Request):
         return JSONResponse({
             "jobs": [_serialize(actives, r) for r in rows],
             "busy": db.worker_busy(conn),
-            # UI는 이 값으로 OCR·차트 체크박스를 노출할지 정한다. web에는 GPU가
-            # 붙지 않으므로 compose가 넣어준 PDF2MD_GPU를 그대로 전달할 뿐이다.
-            "gpu": config.GPU_ENABLED,
         })
     finally:
         conn.close()
