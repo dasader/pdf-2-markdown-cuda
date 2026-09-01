@@ -104,6 +104,20 @@ def count_queued(conn, session_id) -> int:
         (session_id,)).fetchone()[0]
 
 
+def delete_done(conn, session_id, admin: bool) -> int:
+    """완료 잡 행을 지운다(관리자면 전체, 아니면 제 세션 것만).
+
+    파일은 건드리지 않는다 — 워커 sweep이 참조 없는 업로드·결과부터 정리한다.
+    """
+    if admin:
+        cur = conn.execute("DELETE FROM jobs WHERE status='done'")
+    else:
+        cur = conn.execute(
+            "DELETE FROM jobs WHERE status='done' AND session_id=?", (session_id,))
+    conn.commit()
+    return cur.rowcount
+
+
 def delete_expired(conn) -> int:
     cur = conn.execute("DELETE FROM jobs WHERE created_at < ?",
                        (time.time() - config.RETENTION_SEC,))

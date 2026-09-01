@@ -8,6 +8,8 @@ const optCsv = $("#opt-csv");
 const queueEl = $("#queue");
 const beatEl = $("#beat");
 const downallEl = $("#downall");
+const downmdEl = $("#downmd");
+const clrdoneEl = $("#clrdone");
 const adminBtn = $("#admin");
 const modalEl = $("#modal");
 const modalFn = $("#modal-fn");
@@ -137,7 +139,11 @@ function render() {
   beatEl.classList.toggle("hide", !showBeat);
 
   const myDone = jobs.filter((j) => j.status === "done").length;
+  // 일괄 내려받기는 2건부터 — 1건이면 카드의 MD/ZIP 버튼으로 충분하다.
+  // 비우기는 1건부터 보인다.
   downallEl.classList.toggle("hide", myDone < 2);
+  downmdEl.classList.toggle("hide", myDone < 2);
+  clrdoneEl.classList.toggle("hide", myDone < 1);
 
   // Move a card only when it's actually out of place. Admin mode polls every 2s
   // and re-renders unconditionally; appendChild-ing all ~200 nodes each tick
@@ -321,9 +327,27 @@ addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeModal();
 });
 
-// ---- download all ----
+// ---- download all / clear done ----
 
 downallEl.onclick = () => download("/api/download-all", "pdf2md-변환결과.zip");
+downmdEl.onclick = () => download("/api/download-all?md=1", "pdf2md-마크다운.zip");
+
+clrdoneEl.onclick = async () => {
+  const n = [...state.values()].filter((j) => j.status === "done").length;
+  if (!n) return;
+  // 실수 방지: 되돌릴 수 없으므로 건수를 보여주고 확인을 한 번 더 받는다.
+  // ponytail: 네이티브 confirm — 관리자 키 입력이 이미 prompt를 쓰고 있어 톤이 맞고,
+  // 모달을 새로 짤 것 없이 오확인(연타 통과)이 원천 차단된다.
+  const msg = `완료된 ${n}건을 목록에서 지웁니다.\n\n` +
+    "되돌릴 수 없습니다. 같은 PDF를 다시 올리면 새로 변환합니다.\n\n계속할까요?";
+  if (!confirm(msg)) return;
+  const res = await apiFetch("/api/delete-done", { method: "DELETE" });
+  if (!res.ok) {
+    alert("삭제에 실패했습니다.");
+    return;
+  }
+  await refresh();
+};
 
 // ---- admin toggle ----
 

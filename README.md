@@ -256,6 +256,8 @@ docling 출력을 그대로 쓰면 공문서 조판 특유의 잡음이 남는�
 | `GET` | `/api/jobs/{id}/preview` | 마크다운 원문 (text/plain). UI의 "MD 내려받기"도 이걸 파일로 저장 |
 | `GET` | `/api/jobs/{id}/download` | 결과 `result.zip` |
 | `GET` | `/api/download-all` | 완료 잡들을 파일명별 폴더로 묶은 단일 ZIP |
+| `GET` | `/api/download-all?md=1` | 완료 잡들의 `doc.md`만 `{원본이름}.md`로 평평하게 묶은 ZIP |
+| `DELETE` | `/api/delete-done` | 완료 잡 행 삭제(admin이면 전체). 결과 파일은 워커 sweep이 정리 |
 
 세션은 `sid` 쿠키(httpOnly)로 자동 발급. 관리자 요청은 `X-Admin-Key` 헤더로.
 
