@@ -5,6 +5,7 @@ const dropEl = $("#drop");
 const fileInput = $("#file");
 const optImg = $("#opt-img");
 const optCsv = $("#opt-csv");
+const optJson = $("#opt-json");
 const queueEl = $("#queue");
 const beatEl = $("#beat");
 const downallEl = $("#downall");
@@ -265,6 +266,7 @@ async function upload(files) {
   files.forEach((f) => fd.append("files", f));
   fd.append("include_images", optImg.checked ? "true" : "false");
   fd.append("include_tables_csv", optCsv.checked ? "true" : "false");
+  fd.append("include_json", optJson.checked ? "true" : "false");
   await apiFetch("/api/jobs", { method: "POST", body: fd });
   await refresh();
 }

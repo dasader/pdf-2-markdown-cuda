@@ -556,6 +556,31 @@ def test_convert_writes_table_csv_and_counts_n_tables(tmp_path, monkeypatch):
     assert "tables/table-01.csv" in names
 
 
+def test_convert_writes_doc_json_when_requested(tmp_path, monkeypatch):
+    class FakeDoc:
+        tables = []
+        pictures = []
+        def save_as_markdown(self, path, artifacts_dir=None, image_mode=None):
+            Path(path).write_text("# hi\n")
+        def save_as_json(self, path):
+            Path(path).write_text('{"name": "x"}')
+    class FakeResult:
+        document = FakeDoc()
+    class FakeConverter:
+        def __init__(self, *a, **k): pass
+        def convert(self, p): return FakeResult()
+
+    monkeypatch.setattr(convert, "_build_converter", lambda **kw: FakeConverter())
+    out = tmp_path / "J"
+    convert.convert(FIX, out, include_images=False, include_tables_csv=False, include_json=True)
+    assert (out / "doc.json").exists()
+    import zipfile
+    assert "doc.json" in zipfile.ZipFile(out / "result.zip").namelist()
+    # json=0은 기존 캐시 키를 바꾸지 않고, json=1만 별도 키
+    assert convert.opts_hash(False, False) == convert.opts_hash(False, False, False)
+    assert convert.opts_hash(False, False) != convert.opts_hash(False, False, True)
+
+
 def test_convert_image_refs_are_relative_real_docling_core(tmp_path, monkeypatch):
     # 회귀 테스트: 실제 docling_core DoclingDocument로 이미지 1개를 만들어
     # save_as_markdown(REFERENCED)의 참조 경로가 절대경로가 아니라

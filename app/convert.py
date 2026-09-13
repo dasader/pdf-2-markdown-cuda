@@ -60,8 +60,12 @@ def probe(path) -> tuple[int, int]:
 CONVERTER_REV = 7
 
 
-def opts_hash(include_images: bool, include_tables_csv: bool) -> str:
+def opts_hash(include_images: bool, include_tables_csv: bool,
+              include_json: bool = False) -> str:
     key = f"rev={CONVERTER_REV};img={int(include_images)};csv={int(include_tables_csv)}"
+    # json=0을 키에 넣지 않아 기존 캐시(rev 7)가 그대로 살아있다.
+    if include_json:
+        key += ";json=1"
     return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
@@ -497,7 +501,8 @@ def _build_converter(*, picture_images: bool = True):
     )
 
 
-def convert(pdf_path, out_dir, *, include_images: bool, include_tables_csv: bool):
+def convert(pdf_path, out_dir, *, include_images: bool, include_tables_csv: bool,
+            include_json: bool = False):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     md_path = out_dir / "doc.md"
@@ -529,6 +534,11 @@ def convert(pdf_path, out_dir, *, include_images: bool, include_tables_csv: bool
             # CP949)으로 읽어 한글이 깨진다. BOM 3바이트가 UTF-8임을 알려준다.
             df.to_csv(tables_dir / f"table-{i:02d}.csv", index=False, encoding="utf-8-sig")
 
+    if include_json:
+        # DoclingDocument 전체(본문·표 셀·병합·좌표). 표만 JSON으로 원하면 doc.json의
+        # `tables[]`를 읽는다.
+        doc.save_as_json(out_dir / "doc.json")
+
     # n_images: 문서의 실제 그림 개수(옵션과 무관하게 정확) — n_tables와 대칭.
     n_images = len(getattr(doc, "pictures", None) or [])
 
@@ -536,6 +546,8 @@ def convert(pdf_path, out_dir, *, include_images: bool, include_tables_csv: bool
     zip_path = out_dir / "result.zip"
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
         z.write(md_path, "doc.md")
+        if (out_dir / "doc.json").exists():
+            z.write(out_dir / "doc.json", "doc.json")
         for sub in ("images", "tables"):
             d = out_dir / sub
             if d.exists():

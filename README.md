@@ -249,7 +249,7 @@ docling 출력을 그대로 쓰면 공문서 조판 특유의 잡음이 남는�
 | 메서드 | 경로 | 설명 |
 |---|---|---|
 | `GET` | `/` | 웹 UI |
-| `POST` | `/api/jobs` | multipart 업로드(다중). 폼필드 `include_images`, `include_tables_csv` (둘 다 기본 `false`) |
+| `POST` | `/api/jobs` | multipart 업로드(다중). 폼필드 `include_images`, `include_tables_csv`, `include_json` (모두 기본 `false`) |
 | `POST` | `/api/convert` | **동기 변환.** PDF 1개(`file`) → 마크다운 본문 (text/plain) |
 | `GET` | `/api/jobs` | `{jobs, busy}` — 내 잡 목록(+admin 시 전체), 대기 잡엔 `ahead` |
 | `GET` | `/api/events` | SSE. `{jobs, busy}` 변경분 push |
@@ -275,6 +275,7 @@ curl -F file=@doc.pdf http://<host>:8001/api/convert     # → 마크다운 본�
 | `file` | (필수) | PDF 1개 |
 | `include_images` | `false` | `true`면 doc.md에 `images/...` 상대경로가 남는다(본문만 받는 쪽엔 깨진 링크) |
 | `include_tables_csv` | `false` | 표는 옵션과 무관하게 본문에 마크다운 표로 들어간다 |
+| `include_json` | `false` | `true`면 결과 ZIP에 `doc.json`(Docling 문서 전체: 본문·표 셀·병합·좌표) 추가. `/api/convert` 응답은 여전히 마크다운만 — JSON은 `/api/jobs/{id}/download`로 |
 | `timeout` | `300` | 초. 초과하면 `202 {job_id}` — 회수는 `preview`(쿠키 또는 `X-Admin-Key`) |
 
 검증 실패(비PDF·스캔본·페이지 초과 등)는 `422`에 사유가 그대로 담긴다. 업로드 검증·해시

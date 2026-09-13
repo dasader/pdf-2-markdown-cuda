@@ -110,11 +110,12 @@ def _fail(conn, jid, sid, filename, oh, error, *, sha="-", page_total=None):
 async def create_jobs(request: Request,
                       files: Optional[list[UploadFile]] = None,
                       include_images: str = Form("false"),
-                      include_tables_csv: str = Form("false")):
+                      include_tables_csv: str = Form("false"),
+                      include_json: str = Form("false")):
     sid = _sid(request)
     inc_img = include_images == "true"
     inc_csv = include_tables_csv == "true"
-    oh = convert.opts_hash(inc_img, inc_csv)
+    oh = convert.opts_hash(inc_img, inc_csv, include_json == "true")
     conn = db.connect()
     out = []
     try:
@@ -181,6 +182,7 @@ async def convert_sync(request: Request,
                        file: UploadFile,
                        include_images: str = Form("false"),
                        include_tables_csv: str = Form("false"),
+                       include_json: str = Form("false"),
                        timeout: float = Form(300)):
     """PDF 1개 → 마크다운 본문(text/plain). 외부 에이전트용 한 방 엔드포인트.
 
@@ -191,7 +193,8 @@ async def convert_sync(request: Request,
     """
     resp = await create_jobs(request, files=[file],
                              include_images=include_images,
-                             include_tables_csv=include_tables_csv)
+                             include_tables_csv=include_tables_csv,
+                             include_json=include_json)
     job_id = json.loads(resp.body)[0]["id"]
     conn = db.connect()
     try:
